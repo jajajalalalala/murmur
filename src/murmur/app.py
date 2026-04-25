@@ -11,10 +11,13 @@ from collections.abc import Callable
 from enum import Enum
 
 from . import config as config_mod
+from ._logging import get_logger
 from .audio import SAMPLE_RATE, Recorder
 from .hotkey import PushToTalkHotkey
 from .inject import to_clipboard
 from .transcribe import build as build_transcriber
+
+_log = get_logger("app")
 
 
 class State(str, Enum):
@@ -63,10 +66,13 @@ class MurmurApp:
     def _on_press(self) -> None:
         with self._lock:
             if self._state is not State.IDLE:
+                _log.debug("press ignored, state=%s", self._state.value)
                 return
+            _log.info("press: starting recorder")
             try:
                 self._recorder.start()
             except Exception as e:  # noqa: BLE001
+                _log.exception("recorder.start() failed")
                 self._on_error(e)
                 return
             self._set_state(State.RECORDING)
@@ -74,8 +80,10 @@ class MurmurApp:
     def _on_release(self) -> None:
         with self._lock:
             if self._state is not State.RECORDING:
+                _log.debug("release ignored, state=%s", self._state.value)
                 return
             pcm = self._recorder.stop()
+            _log.info("release: captured %.2fs of audio", pcm.size / SAMPLE_RATE)
             self._set_state(State.TRANSCRIBING)
 
         # Transcribe off the listener thread so we don't block keyboard events.
