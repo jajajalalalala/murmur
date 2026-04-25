@@ -7,11 +7,13 @@ machines without a graphical session, or for quick smoke tests).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
 from . import __version__
 from . import config as config_mod
+from ._logging import get_logger, setup_logging
 from .audio import SAMPLE_RATE, Recorder
 from .inject import to_clipboard
 from .transcribe import build as build_transcriber
@@ -73,7 +75,16 @@ def main() -> int:
     parser.add_argument("--backend", choices=["local", "openai"], help="Override config backend.")
     parser.add_argument("--language", help="Override language (ISO 639-1, or 'auto').")
     parser.add_argument("--show-config", action="store_true", help="Print config path and exit.")
+    parser.add_argument(
+        "--debug", action="store_true", help="Verbose logging (also via MURMUR_DEBUG=1)."
+    )
     args = parser.parse_args()
+
+    debug = args.debug or os.environ.get("MURMUR_DEBUG") == "1"
+    log_file = setup_logging(debug=debug)
+    log = get_logger("main")
+    log.info("Murmur v%s starting (pid=%d, debug=%s)", __version__, os.getpid(), debug)
+    log.info("Log file: %s", log_file)
 
     cfg = config_mod.load()
     if args.backend:
@@ -96,7 +107,9 @@ def _warn_if_input_monitoring_denied() -> None:
     """Warn loudly on macOS before the GUI starts, so the user sees it in stderr."""
     from .permissions import InputMonitoringStatus, input_monitoring_status
 
-    if input_monitoring_status() == InputMonitoringStatus.DENIED:
+    status = input_monitoring_status()
+    get_logger("main").info("Input Monitoring status: %s", status.value)
+    if status == InputMonitoringStatus.DENIED:
         print(
             "\n[murmur] macOS Input Monitoring is DENIED for this binary.\n"
             "         The hotkey will not work until you enable it in:\n"

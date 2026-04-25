@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import __version__
 from . import config as config_mod
+from ._logging import get_logger
 from .app import MurmurApp, State
 from .hud import RecordingHUD
 from .permissions import (
@@ -21,6 +22,8 @@ from .permissions import (
     request_input_monitoring,
 )
 from .settings_dialog import SettingsDialog
+
+_log = get_logger("tray")
 
 
 def _dot_icon(color: str) -> QIcon:
@@ -58,14 +61,18 @@ def _ensure_input_monitoring(parent=None) -> bool:
     Returns True if it's safe to continue, False if we should bail.
     """
     status = input_monitoring_status()
+    _log.info("Input Monitoring status at startup: %s", status.value)
     if status == InputMonitoringStatus.GRANTED:
         return True
     if status == InputMonitoringStatus.UNAVAILABLE:
         # Older macOS without IOHIDCheckAccess — let pynput try anyway.
+        _log.info("IOHIDCheckAccess unavailable; proceeding without gate")
         return True
     # On UNKNOWN, ask once. macOS only shows the prompt the first time.
-    if status == InputMonitoringStatus.UNKNOWN and request_input_monitoring():
-        return True
+    if status == InputMonitoringStatus.UNKNOWN:
+        _log.info("requesting Input Monitoring (will trigger system prompt)")
+        if request_input_monitoring():
+            return True
 
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
@@ -73,9 +80,13 @@ def _ensure_input_monitoring(parent=None) -> bool:
     box.setText("Murmur can't see your hotkey yet.")
     box.setInformativeText(
         "macOS requires Input Monitoring permission for global push-to-talk.\n\n"
-        "1. Click 'Open System Settings' below\n"
-        "2. Toggle Murmur (or your terminal, if you ran ./start.sh) ON\n"
-        "3. Quit and relaunch Murmur — macOS only re-checks at startup."
+        "1. Click 'Open System Settings' below.\n"
+        "2. If you see an old 'Murmur' entry, REMOVE it (–) before toggling — "
+        "every rebuild creates a new identity that the old entry doesn't cover.\n"
+        "3. Toggle the current Murmur ON.\n"
+        "4. Quit and relaunch Murmur — macOS only re-checks Input Monitoring "
+        "at startup.\n\n"
+        "Logs: ~/Library/Logs/Murmur/murmur.log"
     )
     open_btn = box.addButton("Open System Settings", QMessageBox.ButtonRole.ActionRole)
     box.addButton("Quit", QMessageBox.ButtonRole.RejectRole)
@@ -122,6 +133,7 @@ def run_tray(cfg: config_mod.Config) -> int:
     hud = RecordingHUD()
 
     def on_state(s: State) -> None:
+        _log.info("state -> %s", s.value)
         color, label = STATE_ICONS.get(s, STATE_ICONS[State.IDLE])
         tray.setIcon(_dot_icon(color))
         tray.setToolTip(f"Murmur v{__version__} — {label}")
@@ -141,6 +153,7 @@ def run_tray(cfg: config_mod.Config) -> int:
         )
 
     def on_error_msg(msg: str) -> None:
+        _log.error("error: %s", msg)
         tray.showMessage("Murmur error", msg, QSystemTrayIcon.MessageIcon.Critical, 4000)
 
     bridge.state_changed.connect(on_state)

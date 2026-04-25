@@ -6,10 +6,15 @@ The hotkey is *held* — `on_press` fires once when the key goes down,
 """
 from __future__ import annotations
 
-import contextlib
+import threading
+import time
 from collections.abc import Callable
 
 from pynput import keyboard
+
+from ._logging import get_logger
+
+_log = get_logger("hotkey")
 
 
 class PushToTalkHotkey:
@@ -79,34 +84,49 @@ class PushToTalkHotkey:
                 raise ValueError(f"Cannot parse hotkey token: {token!r}")
         return out
 
-    def _normalize(self, key) -> object:
-        # Treat left/right modifier variants as their generic form when the spec
-        # asked for the generic one, and vice-versa.
+    def _key_repr(self, key) -> str:
         if isinstance(key, keyboard.Key):
-            return key
-        return key
+            return f"<{key.name}>"
+        try:
+            return repr(key.char)
+        except AttributeError:
+            return repr(key)
 
     def _on_key_press(self, key) -> None:
-        key = self._normalize(key)
-        if key in self._target_keys:
-            self._held_keys.add(key)
-            if not self._is_active and self._held_keys >= self._target_keys:
-                self._is_active = True
-                with contextlib.suppress(Exception):
-                    self._on_press()
+        try:
+            _log.debug("press  %s", self._key_repr(key))
+            if key in self._target_keys:
+                self._held_keys.add(key)
+                if not self._is_active and self._held_keys >= self._target_keys:
+                    self._is_active = True
+                    _log.info("hotkey ACTIVATED (%s)", self._key_spec)
+                    try:
+                        self._on_press()
+                    except Exception:
+                        _log.exception("on_press callback raised")
+        except Exception:
+            _log.exception("error in _on_key_press")
 
     def _on_key_release(self, key) -> None:
-        key = self._normalize(key)
-        if key in self._target_keys:
-            self._held_keys.discard(key)
-            if self._is_active and not (self._held_keys >= self._target_keys):
-                self._is_active = False
-                with contextlib.suppress(Exception):
-                    self._on_release()
+        try:
+            _log.debug("release %s", self._key_repr(key))
+            if key in self._target_keys:
+                self._held_keys.discard(key)
+                if self._is_active and not (self._held_keys >= self._target_keys):
+                    self._is_active = False
+                    _log.info("hotkey RELEASED (%s)", self._key_spec)
+                    try:
+                        self._on_release()
+                    except Exception:
+                        _log.exception("on_release callback raised")
+        except Exception:
+            _log.exception("error in _on_key_release")
 
     def start(self) -> None:
         if self._listener is not None:
             return
+        target_names = sorted(self._key_repr(k) for k in self._target_keys)
+        _log.info("starting pynput Listener for %s -> %s", self._key_spec, target_names)
         self._listener = keyboard.Listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,
@@ -114,7 +134,35 @@ class PushToTalkHotkey:
         self._listener.daemon = True
         self._listener.start()
 
+        # Spawn a watcher: if the listener thread dies (e.g. macOS denies the
+        # event tap), we want it in the log instead of staying silent forever.
+        threading.Thread(
+            target=self._watch_listener,
+            name="murmur-hotkey-watch",
+            daemon=True,
+        ).start()
+
+    def _watch_listener(self) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        # Give it a moment to come up, then check it's actually alive.
+        time.sleep(0.5)
+        if not listener.running:
+            _log.error(
+                "pynput Listener failed to start — likely macOS Input Monitoring "
+                "is not granted to this binary. Toggle it OFF then ON in "
+                "System Settings → Privacy & Security → Input Monitoring."
+            )
+            return
+        _log.info("pynput Listener is running")
+        # If it dies later, log that too.
+        listener.join()
+        if self._listener is listener:
+            _log.warning("pynput Listener thread exited unexpectedly")
+
     def stop(self) -> None:
         if self._listener is not None:
+            _log.info("stopping pynput Listener")
             self._listener.stop()
             self._listener = None
