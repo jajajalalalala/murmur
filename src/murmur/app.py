@@ -1,0 +1,118 @@
+"""App controller: wires hotkey → recorder → transcriber → clipboard.
+
+State machine:
+    IDLE → RECORDING (hotkey down) → TRANSCRIBING (hotkey up) → IDLE
+"""
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable
+from enum import Enum
+
+from . import config as config_mod
+from .audio import Recorder, SAMPLE_RATE
+from .hotkey import PushToTalkHotkey
+from .inject import to_clipboard
+from .transcribe import build as build_transcriber
+
+
+class State(str, Enum):
+    IDLE = "idle"
+    RECORDING = "recording"
+    TRANSCRIBING = "transcribing"
+
+
+class MurmurApp:
+    """Headless controller. UI layers (tray, CLI) subscribe via on_state_change."""
+
+    def __init__(
+        self,
+        cfg: config_mod.Config,
+        on_state_change: Callable[[State], None] | None = None,
+        on_result: Callable[[str], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        self.cfg = cfg
+        self._on_state_change = on_state_change or (lambda _s: None)
+        self._on_result = on_result or (lambda _t: None)
+        self._on_error = on_error or (lambda _e: None)
+        self._recorder = Recorder()
+        self._transcriber = None  # lazy
+        self._hotkey: PushToTalkHotkey | None = None
+        self._state = State.IDLE
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> State:
+        return self._state
+
+    def _set_state(self, s: State) -> None:
+        self._state = s
+        try:
+            self._on_state_change(s)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _ensure_transcriber(self):
+        if self._transcriber is None:
+            self._transcriber = build_transcriber(self.cfg)
+        return self._transcriber
+
+    # --- Hotkey callbacks (run on pynput's listener thread) ---
+
+    def _on_press(self) -> None:
+        with self._lock:
+            if self._state is not State.IDLE:
+                return
+            try:
+                self._recorder.start()
+            except Exception as e:  # noqa: BLE001
+                self._on_error(e)
+                return
+            self._set_state(State.RECORDING)
+
+    def _on_release(self) -> None:
+        with self._lock:
+            if self._state is not State.RECORDING:
+                return
+            pcm = self._recorder.stop()
+            self._set_state(State.TRANSCRIBING)
+
+        # Transcribe off the listener thread so we don't block keyboard events.
+        threading.Thread(
+            target=self._do_transcribe,
+            args=(pcm,),
+            daemon=True,
+        ).start()
+
+    def _do_transcribe(self, pcm) -> None:
+        try:
+            duration = pcm.size / SAMPLE_RATE
+            if duration < 0.2:
+                self._set_state(State.IDLE)
+                return
+            transcriber = self._ensure_transcriber()
+            text = transcriber.transcribe(pcm, SAMPLE_RATE, language=self.cfg.language)
+            if text:
+                if self.cfg.auto_paste:
+                    to_clipboard(text)
+                self._on_result(text)
+        except Exception as e:  # noqa: BLE001
+            self._on_error(e)
+        finally:
+            self._set_state(State.IDLE)
+
+    # --- Lifecycle ---
+
+    def start(self) -> None:
+        self._hotkey = PushToTalkHotkey(
+            key_spec=self.cfg.hotkey,
+            on_press=self._on_press,
+            on_release=self._on_release,
+        )
+        self._hotkey.start()
+
+    def stop(self) -> None:
+        if self._hotkey is not None:
+            self._hotkey.stop()
+            self._hotkey = None

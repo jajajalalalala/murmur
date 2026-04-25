@@ -4,32 +4,34 @@ The vision: **press a key, speak, get text** — nothing more, nothing less. Eac
 
 ---
 
-## v0.1 — "It transcribes" (CLI)
+## v0.1 — "It transcribes" (CLI) ✅
 
 **Goal:** Prove the speech-to-text loop end-to-end on the developer's machine.
 
 - [x] Project scaffolding, README, roadmap, architecture
-- [ ] `audio.py` — record from default mic to in-memory WAV (16 kHz mono)
-- [ ] `transcribe/base.py` — `Transcriber` interface
-- [ ] `transcribe/local.py` — `faster-whisper` backend, lazy model load
-- [ ] `transcribe/openai_api.py` — OpenAI `audio.transcriptions` backend
-- [ ] `config.py` — load/save TOML config in user config dir
-- [ ] `__main__.py` — interactive CLI: Enter to start/stop, prints text + copies to clipboard
+- [x] `audio.py` — record from default mic to in-memory PCM (16 kHz mono)
+- [x] `transcribe/base.py` — `Transcriber` interface
+- [x] `transcribe/local.py` — `faster-whisper` backend, lazy model load
+- [x] `transcribe/openai_api.py` — OpenAI `audio.transcriptions` backend
+- [x] `config.py` — load/save TOML config in user config dir
+- [x] `__main__.py` — interactive CLI: Enter to start/stop, prints text + copies to clipboard
 
-**Done when:** `murmur` from the terminal records my voice and outputs accurate text in <5 s for a 10 s clip.
+**Done when:** `murmur --cli` records my voice and outputs accurate text in <5 s for a 10 s clip.
 
 ---
 
-## v0.2 — "Hotkey + tray"
+## v0.2 — "Hotkey + tray" ✅
 
 **Goal:** Stop using the terminal. Murmur lives in the menu bar.
 
-- [ ] `hotkey.py` — global push-to-talk via `pynput` (hold to record, release to stop)
-- [ ] `tray.py` — `pystray` / Qt system tray icon with state (idle / recording / transcribing)
-- [ ] App lifecycle: start on launch, runs in background
-- [ ] Visual/audible cue when recording starts and stops
+- [x] `hotkey.py` — global push-to-talk via `pynput` (hold to record, release to stop)
+- [x] `tray.py` — `QSystemTrayIcon` with colored-dot state indicator + Quit menu
+- [x] `app.py` — state machine (IDLE → RECORDING → TRANSCRIBING → IDLE) wiring hotkey/recorder/transcriber
+- [x] `__main__.py` — GUI by default, `--cli` for terminal mode
+- [x] `start.sh` — uv-based isolated setup, one command to install + launch
+- [x] `.python-version` — pin runtime so the app doesn't depend on system Python
 
-**Done when:** I can dictate into any text field by holding the hotkey, and result lands in clipboard.
+**Done when:** I can hold the hotkey from any app, speak, and the result lands in my clipboard with a tray notification.
 
 ---
 

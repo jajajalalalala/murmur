@@ -10,7 +10,7 @@ Murmur is a personal voice-to-text dictation tool for macOS and Windows. Hold a 
 
 ## Status
 
-🚧 **v0.1** — early development. See [ROADMAP.md](ROADMAP.md).
+🚧 **v0.2** — push-to-talk hotkey + system tray. See [ROADMAP.md](ROADMAP.md).
 
 ## Features (v1.0 target)
 
@@ -28,17 +28,33 @@ Murmur is a personal voice-to-text dictation tool for macOS and Windows. Hold a 
 - Real-time streaming transcription
 - Mobile platforms
 
-## Quick start (v0.1 CLI)
+## Quick start
+
+The bundled `start.sh` installs [uv](https://github.com/astral-sh/uv) (if missing), pins Python via `.python-version`, creates an isolated venv, installs deps, and launches Murmur. **You do not need a system Python — uv installs it.**
 
 ```bash
-git clone https://github.com/<you>/murmur.git
+git clone https://github.com/jajajalalalala/murmur.git
 cd murmur
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-murmur                  # interactive: press Enter to start/stop recording
+./start.sh              # default: launches the menu-bar tray app
+./start.sh --cli        # CLI mode (Enter to start/stop)
+./start.sh --setup-only # install dependencies, don't launch
+./start.sh --reset      # wipe .venv and reinstall
 ```
 
 The first run downloads a Whisper model (~150 MB for `base`).
+
+### Default hotkey
+- macOS: `right Option (⌥)` — hold to record, release to transcribe
+- Windows: `right Alt`
+
+Edit the `hotkey` field in the config file (printed by `murmur --show-config`) to change it. Format follows [pynput hotkey syntax](https://pynput.readthedocs.io/en/latest/keyboard.html#monitoring-the-keyboard) — e.g. `<f9>`, `<ctrl>+<shift>+<space>`.
+
+### macOS permissions
+
+On first run macOS will prompt for two permissions — both are required:
+1. **Microphone** — needed to record audio
+2. **Input Monitoring** — needed for the global push-to-talk hotkey
+   (System Settings → Privacy & Security → Input Monitoring → enable your terminal/Murmur)
 
 ## Architecture
 

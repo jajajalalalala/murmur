@@ -1,28 +1,32 @@
-"""v0.1 CLI: press Enter to start recording, Enter again to stop, get text."""
+"""Murmur entrypoint.
+
+Default: launches the menu-bar tray app with global push-to-talk hotkey.
+With --cli: drops to interactive Enter-to-record CLI loop (useful on
+machines without a graphical session, or for quick smoke tests).
+"""
 from __future__ import annotations
 
 import argparse
 import sys
 import time
 
-import pyperclip
-
 from . import __version__, config as config_mod
 from .audio import Recorder, SAMPLE_RATE
+from .inject import to_clipboard
 from .transcribe import build as build_transcriber
 
 
-def _interactive_loop(cfg: config_mod.Config) -> None:
+def _cli_loop(cfg: config_mod.Config) -> int:
     transcriber = build_transcriber(cfg)
     recorder = Recorder()
     print(f"Murmur v{__version__} — backend: {cfg.backend}, language: {cfg.language}")
-    print("Press Enter to start recording, Enter again to stop. Ctrl-C to quit.\n")
+    print("CLI mode. Press Enter to start recording, Enter again to stop. Ctrl-C to quit.\n")
     while True:
         try:
             input("▶  ready — Enter to record... ")
         except (EOFError, KeyboardInterrupt):
             print()
-            return
+            return 0
         recorder.start()
         try:
             input("●  recording — Enter to stop... ")
@@ -42,28 +46,32 @@ def _interactive_loop(cfg: config_mod.Config) -> None:
         if not text:
             print("(no speech detected)\n")
             continue
-        try:
-            pyperclip.copy(text)
-            paste_note = "  [copied to clipboard]"
-        except pyperclip.PyperclipException:
-            paste_note = "  [clipboard unavailable]"
-        print(f"✓  ({dt:.1f}s){paste_note}\n   {text}\n")
+        copied = to_clipboard(text) if cfg.auto_paste else False
+        suffix = "  [copied to clipboard]" if copied else ""
+        print(f"✓  ({dt:.1f}s){suffix}\n   {text}\n")
+
+
+def _gui() -> int:
+    try:
+        from .tray import run_tray
+    except ImportError as e:
+        print(
+            f"GUI dependencies are missing: {e}\n"
+            "Install with:  pip install -e '.[gui]'   "
+            "or run with --cli for the terminal mode.",
+            file=sys.stderr,
+        )
+        return 2
+    return run_tray(config_mod.load())
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="murmur", description="Press a key, speak, get text.")
     parser.add_argument("--version", action="version", version=f"murmur {__version__}")
-    parser.add_argument(
-        "--backend",
-        choices=["local", "openai"],
-        help="Override config backend for this run.",
-    )
+    parser.add_argument("--cli", action="store_true", help="Run in terminal CLI mode (no tray).")
+    parser.add_argument("--backend", choices=["local", "openai"], help="Override config backend.")
     parser.add_argument("--language", help="Override language (ISO 639-1, or 'auto').")
-    parser.add_argument(
-        "--show-config",
-        action="store_true",
-        help="Print config path and contents, then exit.",
-    )
+    parser.add_argument("--show-config", action="store_true", help="Print config path and exit.")
     args = parser.parse_args()
 
     cfg = config_mod.load()
@@ -77,12 +85,9 @@ def main() -> int:
         print(f"backend={cfg.backend} language={cfg.language} hotkey={cfg.hotkey}")
         return 0
 
-    try:
-        _interactive_loop(cfg)
-    except Exception as e:  # noqa: BLE001
-        print(f"error: {e}", file=sys.stderr)
-        return 1
-    return 0
+    if args.cli:
+        return _cli_loop(cfg)
+    return _gui()
 
 
 if __name__ == "__main__":
