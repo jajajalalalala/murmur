@@ -277,6 +277,21 @@ def _stylesheet(p: Palette) -> str:
         font-weight: 600;
     }}
 
+    /* Progress bars (model downloads) */
+    QProgressBar {{
+        background: {p.surface_alt};
+        border: 1px solid {p.border};
+        border-radius: 6px;
+        text-align: center;
+        color: {p.text};
+        font-size: 11px;
+        min-height: 18px;
+    }}
+    QProgressBar::chunk {{
+        background-color: {ACCENT};
+        border-radius: 5px;
+    }}
+
     /* Checkboxes */
     QCheckBox {{
         spacing: 8px;
