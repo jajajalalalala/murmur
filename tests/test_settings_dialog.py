@@ -35,7 +35,7 @@ def _make_cfg() -> config_mod.Config:
 def test_dialog_loads_existing_config(qapp):
     cfg = _make_cfg()
     dlg = SettingsDialog(cfg)
-    assert dlg.hotkey_edit.text() == "<right_alt>"
+    assert dlg.hotkey_recorder.value() == "<right_alt>"
     assert dlg.backend_combo.currentText() == "local"
     assert dlg.model_combo.currentText() == "base"
     assert dlg.language_combo.currentData() == "en"
@@ -55,7 +55,7 @@ def test_dialog_round_trip_unchanged(qapp):
 def test_dialog_applies_edits(qapp):
     cfg = _make_cfg()
     dlg = SettingsDialog(cfg)
-    dlg.hotkey_edit.setText("<f9>")
+    dlg.hotkey_recorder.set_value("<f9>")
     dlg.backend_combo.setCurrentText("openai")
     dlg.model_combo.setCurrentText("small")
     dlg.language_combo.setCurrentIndex(0)  # auto
@@ -82,5 +82,5 @@ def test_dialog_preserves_unknown_local_model(qapp):
 def test_dialog_falls_back_when_hotkey_blank(qapp):
     cfg = _make_cfg()
     dlg = SettingsDialog(cfg)
-    dlg.hotkey_edit.setText("   ")
+    dlg.hotkey_recorder.set_value("")
     assert dlg.updated_config().hotkey == cfg.hotkey

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config as config_mod
+from .hotkey_recorder import HotkeyRecorder
 
 # Curated lists — keep small; users can hand-edit the TOML for exotic values.
 BACKENDS = ["local", "openai"]
@@ -45,14 +46,13 @@ class SettingsDialog(QDialog):
 
         form = QFormLayout()
 
-        self.hotkey_edit = QLineEdit(cfg.hotkey)
-        self.hotkey_edit.setPlaceholderText("<right_alt>")
-        form.addRow("Hotkey:", self.hotkey_edit)
+        self.hotkey_recorder = HotkeyRecorder(cfg.hotkey)
+        form.addRow("Hotkey:", self.hotkey_recorder)
         form.addRow(
             "",
             QLabel(
-                "Examples: <right_alt>, <right_option>, <f9>, "
-                "<ctrl>+<shift>+<space>"
+                "Click Record, then press the key (or combo) you want as "
+                "your push-to-talk."
             ),
         )
 
@@ -89,6 +89,10 @@ class SettingsDialog(QDialog):
         self.auto_paste.setChecked(cfg.auto_paste)
         form.addRow("", self.auto_paste)
 
+        self.show_hud = QCheckBox("Show recording HUD")
+        self.show_hud.setChecked(cfg.show_hud)
+        form.addRow("", self.show_hud)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
 
@@ -104,8 +108,9 @@ class SettingsDialog(QDialog):
         new = config_mod.Config(
             backend=self.backend_combo.currentText(),
             language=self.language_combo.currentData(),
-            hotkey=self.hotkey_edit.text().strip() or self._cfg.hotkey,
+            hotkey=self.hotkey_recorder.value() or self._cfg.hotkey,
             auto_paste=self.auto_paste.isChecked(),
+            show_hud=self.show_hud.isChecked(),
             local=config_mod.LocalBackendConfig(
                 model=self.model_combo.currentText(),
                 device=self._cfg.local.device,
