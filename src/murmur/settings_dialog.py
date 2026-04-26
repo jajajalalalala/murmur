@@ -89,10 +89,7 @@ class SettingsDialog(QDialog):
         self.auto_paste.setChecked(cfg.auto_paste)
         form.addRow("", self.auto_paste)
 
-        self.show_hud = QCheckBox(
-            "Show recording HUD (uncheck if auto-paste loses your cursor focus; "
-            "requires restart)"
-        )
+        self.show_hud = QCheckBox("Show recording HUD")
         self.show_hud.setChecked(cfg.show_hud)
         form.addRow("", self.show_hud)
 
