@@ -111,7 +111,7 @@ See [ROADMAP.md](ROADMAP.md). TL;DR:
 - **v0.2** ✅ Global hotkey + tray icon
 - **v0.3** ✅ Auto-paste at cursor + recording HUD (focus-safe NSPanel)
 - **v0.4** ✅ Main window UI: Home / Shortcuts / Models, click-to-record hotkey, local model downloads
-- **v0.5** Provider expansion: Groq / Kimi / DeepSeek via OpenAI-compatible registry
+- **v0.5** Daily-driver polish: full-keyboard hotkey coverage, colorful UI redesign, timestamped transcript table, model download progress, then Groq / Kimi / DeepSeek
 - **v1.0** First-run onboarding + Windows packaging + GitHub release
 - **v1.1+** Hands-free toggle, custom vocabulary, transcript history, AI rewrite (opt-in)
 
