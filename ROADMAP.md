@@ -63,16 +63,34 @@ The vision: **press a key, speak, get text** — nothing more, nothing less. Eac
 
 ---
 
-## v0.5 — "More providers"
+## v0.5 — "Daily-driver polish"
 
-**Goal:** Use whichever cloud transcription provider has the cheapest / best free tier today.
+**Goal:** Sand off the rough edges of v0.4 so Murmur feels like a real app. Ordered by user-felt priority — top items ship first.
 
+### P0 — Pain points blocking daily use
+- [ ] **Full keyboard coverage for hotkeys** (`feat/hotkeys-full-coverage`)
+  - [ ] Expand `hotkey_recorder._MAC_VK_NAMES` to all standard keys: digits, letters, punctuation, arrows, navigation cluster (home/end/pgup/pgdn/del/backspace), caps_lock, full F1–F20
+  - [ ] Same coverage on Windows (Qt nativeVirtualKey → pynput name)
+  - [ ] First-launch probe: detect which keys actually fire keyboard events on this OS / locale and show the result in **Shortcuts → Available keys** so the user knows what's recordable
+  - [ ] `fn` key on macOS: pynput's normal listener can't see it — wire `NSEvent.addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged` as a side channel and treat it as a synthesized `<fn>` token
+  - [ ] Tests for each new VK in the recorder map
+- [ ] **UI redesign — colorful, accessible, Wispr-Flow-inspired** (`feat/ui-redesign`)
+  - [ ] Custom QPalette: accent (teal / violet from icon), distinct surface colors for left rail vs content, light + dark adaptive
+  - [ ] Replace ad-hoc `setStyleSheet` calls with one stylesheet shipped from `theme.py`
+  - [ ] Style: pill-shaped state badge, card-style model rows, segmented-control feel for the provider switch, larger headings
+  - [ ] Verify contrast in macOS Light **and** Dark; no black-on-near-black text
+
+### P1 — Quality-of-life
+- [ ] **Transcript table** (`feat/transcripts-table`) — replace the `QListWidget` on Home with a 2-column `QTableView` (Time | Text), wraps within the window, click row to copy. Lays groundwork for persistence.
+- [ ] **Model download progress** (`feat/model-download-progress`) — poll the HF cache dir size against the known model size and feed a `QProgressBar` per `_LocalModelRow`; cancel button stops the worker.
+
+### P2 — Provider expansion (was v0.5)
 - [ ] `transcribe/openai_compatible.py` — single transcriber covering OpenAI / Groq / DeepSeek / Kimi / custom
 - [ ] Add Groq, Kimi, DeepSeek rows to `CLOUD_PROVIDERS`
 - [ ] Per-provider rate hint shown on the Models page
 - [ ] "Test connection" button that pings the chosen endpoint with a 1-second silence clip
 
-**Done when:** I can paste a Groq key and have free-tier transcription end-to-end without code changes.
+**Done when:** Every key on my keyboard is selectable as a hotkey, the window is readable in dark mode without squinting, transcripts show with timestamps, model downloads show a progress bar, and Groq free-tier works end-to-end.
 
 ---
 
