@@ -14,8 +14,9 @@ to ``huggingface_hub`` directly. Trade-off accepted for simplicity.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -105,11 +107,22 @@ class _LocalModelRow(QFrame):
         self._status = QLabel()
         self._status.setProperty("hint", True)
 
+        # Inline progress bar — hidden until a download is in flight.
+        # Width is bounded so the row keeps its existing proportions when
+        # the bar appears in place of the status label.
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        self._progress.setTextVisible(True)
+        self._progress.setFixedWidth(160)
+        self._progress.setVisible(False)
+
         self._action = primary_button("")
         self._action.clicked.connect(self._on_action)
 
         row.addLayout(text_col, 1)
         row.addWidget(self._status)
+        row.addWidget(self._progress)
         row.addWidget(self._action)
 
         self._is_active = False
@@ -124,7 +137,24 @@ class _LocalModelRow(QFrame):
 
     def set_downloading(self, downloading: bool) -> None:
         self._is_downloading = downloading
+        if not downloading:
+            self._progress.setVisible(False)
+            self._progress.setValue(0)
         self._refresh()
+
+    def set_progress(self, fraction: float) -> None:
+        """Push a 0.0–1.0 progress estimate into the inline bar.
+
+        Polled from the cache directory size; values are best-effort,
+        so we clamp to [0, 99] until the worker reports completion.
+        """
+        if not self._is_downloading:
+            return
+        pct = max(0, min(99, int(fraction * 100)))
+        self._progress.setVisible(True)
+        self._status.setVisible(False)
+        self._progress.setValue(pct)
+        self._progress.setFormat(f"{pct}%")
 
     def refresh_download_state(self) -> None:
         """Re-check disk so a freshly-finished download flips to Use."""
@@ -145,8 +175,14 @@ class _LocalModelRow(QFrame):
         if self._is_downloading:
             self._action.setEnabled(False)
             self._action.setText("Downloading…")
-            self._status.setText("Fetching from HuggingFace")
+            # Show "Fetching…" until the first poll arrives with a real
+            # percentage; from then on _set_progress takes over.
+            if self._progress.value() == 0:
+                self._status.setVisible(True)
+                self._progress.setVisible(False)
+                self._status.setText("Fetching from HuggingFace")
             return
+        self._status.setVisible(True)
         self._action.setEnabled(True)
         if not downloaded:
             self._action.setText("Download")
@@ -168,12 +204,21 @@ class _LocalPanel(QWidget):
 
     model_selected = Signal(str)  # active model id changed
 
+    POLL_INTERVAL_MS = 500  # how often to recheck cache-dir size during download
+
     def __init__(self, cfg: config_mod.Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._rows: dict[str, _LocalModelRow] = {}
         self._active_model_id = cfg.local.model
         self._workers: dict[str, tuple[QThread, _DownloadWorker]] = {}
+
+        # Single timer drives every in-flight progress bar — faster-whisper's
+        # constructor is opaque, so we estimate progress by polling the size
+        # of the HuggingFace cache directory against the model's known total.
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(self.POLL_INTERVAL_MS)
+        self._poll_timer.timeout.connect(self._poll_progress)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -243,6 +288,8 @@ class _LocalPanel(QWidget):
         thread.finished.connect(thread.deleteLater)
         self._workers[model_id] = (thread, worker)
         thread.start()
+        if not self._poll_timer.isActive():
+            self._poll_timer.start()
 
     def _on_download_finished(self, model_id: str, ok: bool, error: str) -> None:
         row = self._rows.get(model_id)
@@ -250,8 +297,29 @@ class _LocalPanel(QWidget):
             row.set_downloading(False)
             row.refresh_download_state()
         self._workers.pop(model_id, None)
+        if not self._workers:
+            self._poll_timer.stop()
         if not ok:
             _log.warning("download of %s failed: %s", model_id, error)
+
+    def _poll_progress(self) -> None:
+        """Walk each downloading model's cache dir and update its bar.
+
+        Coarse but useful: faster-whisper / huggingface_hub doesn't surface
+        a per-byte callback, but the on-disk size grows monotonically as
+        the model is fetched, so size_on_disk / advertised_size_mb is a
+        decent proxy. We clamp to 99% so the bar never claims completion
+        before the worker thread actually finishes.
+        """
+        for model_id in list(self._workers.keys()):
+            row = self._rows.get(model_id)
+            if row is None or row.model.size_mb <= 0:
+                continue
+            target = row.model.size_mb * 1024 * 1024
+            current = _dir_size_bytes(row.model.cache_path())
+            if current <= 0:
+                continue
+            row.set_progress(current / target)
 
 
 # ---- Cloud panel --------------------------------------------------------------
@@ -438,6 +506,28 @@ def _format_size(mb: int) -> str:
     if mb >= 1024:
         return f"{mb / 1024:.1f} GB"
     return f"{mb} MB"
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Total size of every regular file under ``path``, recursively.
+
+    Used to estimate download progress against a model's advertised
+    size. Returns 0 if the directory doesn't exist yet (download
+    hasn't started writing anything).
+    """
+    import contextlib
+
+    if not path.exists():
+        return 0
+    total = 0
+    try:
+        for p in path.rglob("*"):
+            if p.is_file():
+                with contextlib.suppress(OSError):
+                    total += p.stat().st_size
+    except OSError:
+        return total
+    return total
 
 
 __all__ = ["ModelsPage", "find_local_model"]
