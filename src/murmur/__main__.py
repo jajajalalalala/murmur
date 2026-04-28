@@ -76,9 +76,30 @@ def main() -> int:
     parser.add_argument("--language", help="Override language (ISO 639-1, or 'auto').")
     parser.add_argument("--show-config", action="store_true", help="Print config path and exit.")
     parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove config, logs, and downloaded local models, then exit.",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompts (currently used by --uninstall).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --uninstall: print what would be removed without removing it.",
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Verbose logging (also via MURMUR_DEBUG=1)."
     )
     args = parser.parse_args()
+
+    # Uninstall must run before setup_logging — otherwise it'd recreate
+    # the log dir we're trying to delete.
+    if args.uninstall:
+        from .uninstall import run as run_uninstall
+        return run_uninstall(assume_yes=args.yes, dry_run=args.dry_run)
 
     debug = args.debug or os.environ.get("MURMUR_DEBUG") == "1"
     log_file = setup_logging(debug=debug)
