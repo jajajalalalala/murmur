@@ -10,10 +10,16 @@ class LocalWhisper:
         model: str = "base",
         device: str = "auto",
         compute_type: str = "int8",
+        download_root: str | None = None,
     ) -> None:
         self.model_name = model
         self.device = device
         self.compute_type = compute_type
+        # ``None`` lets faster-whisper / huggingface_hub fall back to its
+        # default cache location. The factory resolves Murmur's private
+        # path (under platformdirs.user_data_dir) before we get here, so
+        # this code path stays simple.
+        self.download_root = download_root
         self._model = None  # lazy-loaded
 
     def _load(self):
@@ -26,6 +32,7 @@ class LocalWhisper:
             self.model_name,
             device=self.device,
             compute_type=self.compute_type,
+            download_root=self.download_root,
         )
         return self._model
 

@@ -4,8 +4,14 @@ Driven by ``murmur --uninstall``. Removes:
 
 * the user config dir (``config.toml`` lives here)
 * the log dir (``murmur.log`` and rotated copies)
-* every faster-whisper model cache directory under HuggingFace
-  (``models--Systran--faster-whisper-*``)
+* Murmur's private model store under
+  ``platformdirs.user_data_dir("Murmur") / "models"`` (introduced in
+  v0.6 — see issue #12). Pre-v0.6 downloads in
+  ``~/.cache/huggingface/hub/`` are *not* touched: Murmur no longer
+  manages that directory and we don't know which entries belong to
+  Murmur vs. another HuggingFace-using app on the user's machine.
+  The user is shown an "rm -rf" hint so they can clean up manually
+  if they want to.
 
 Things this **doesn't** touch — those are user-managed and removing
 them automatically would violate the principle of least surprise:
@@ -14,6 +20,7 @@ them automatically would violate the principle of least surprise:
 * the source checkout / virtualenv if running via ``start.sh``
 * macOS Privacy & Security entries (Input Monitoring / Accessibility) —
   the OS only lets the user revoke those manually
+* the legacy HuggingFace cache (see above)
 
 The uninstall flow lists what it found, asks for confirmation
 (unless ``--yes`` was passed), then removes each target. Failures are
@@ -22,7 +29,6 @@ is better than aborting halfway.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from collections.abc import Callable
@@ -31,6 +37,7 @@ from pathlib import Path
 
 from . import _logging as log_mod
 from . import config as config_mod
+from .transcribe.factory import default_local_download_root
 
 
 @dataclass(frozen=True)
@@ -42,13 +49,12 @@ class Target:
         return self.path.exists()
 
 
-def _hf_cache_root() -> Path:
-    """Mirror the resolution order LocalModel.cache_path uses."""
-    return Path(
-        os.environ.get("HF_HOME")
-        or os.environ.get("HUGGINGFACE_HUB_CACHE")
-        or Path.home() / ".cache" / "huggingface" / "hub"
-    )
+def _model_store_root() -> Path:
+    """Murmur's private model store path (the new v0.6+ default).
+
+    Kept as a thin wrapper so tests can monkey-patch a single name.
+    """
+    return default_local_download_root()
 
 
 def collect_targets() -> list[Target]:
@@ -58,12 +64,9 @@ def collect_targets() -> list[Target]:
         Target("Config", config_mod.config_path().parent),
         Target("Logs", log_mod.log_path().parent),
     ]
-    cache_root = _hf_cache_root()
-    if cache_root.is_dir():
-        for entry in sorted(cache_root.iterdir()):
-            name = entry.name
-            if name.startswith("models--Systran--faster-whisper-"):
-                targets.append(Target(f"Model cache ({name})", entry))
+    store = _model_store_root()
+    if store.is_dir():
+        targets.append(Target("Model store", store))
     return targets
 
 
@@ -109,6 +112,21 @@ def run(
         "  • System Settings → Privacy & Security → Input Monitoring "
         "/ Accessibility — revoke the entry for Murmur.app or your "
         "Python binary",
+        file=out,
+    )
+    # Models downloaded before v0.6 lived in the shared HuggingFace
+    # cache. Murmur stopped managing that path in #12, so we leave it
+    # alone here and surface a copy-pasteable hint instead. Shown for
+    # both --dry-run and the real uninstall flow.
+    print(
+        "  • Pre-v0.6 model downloads may still be in "
+        "~/.cache/huggingface/hub/ — Murmur no longer manages that "
+        "directory. Remove manually if desired:",
+        file=out,
+    )
+    print(
+        "      rm -rf ~/.cache/huggingface/hub/"
+        "models--Systran--faster-whisper-*",
         file=out,
     )
 

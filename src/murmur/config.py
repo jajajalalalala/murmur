@@ -21,6 +21,12 @@ class LocalBackendConfig:
     model: str = ""
     device: str = "auto"
     compute_type: str = "int8"
+    # Where faster-whisper writes downloaded model files. Empty string
+    # means "use the platformdirs default" (resolved at the call site
+    # via transcribe.factory._resolve_local_download_root). Persisting
+    # the empty default keeps existing TOML files unchanged across the
+    # v0.5 → v0.6 path move.
+    download_root: str = ""
 
 
 @dataclass

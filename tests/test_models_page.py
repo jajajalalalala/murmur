@@ -148,13 +148,17 @@ def test_poll_progress_updates_row_from_cache_size(qapp, monkeypatch):
 # ---- Delete button --------------------------------------------------------
 
 def _seed_fake_cache(monkeypatch, tmp_path, model_id: str):
-    """Point HF_HOME at tmp_path and create the cache dir for ``model_id``.
+    """Point Murmur's private model store at tmp_path and seed ``model_id``.
 
-    Returns the seeded cache path. Mirrors what HuggingFace would create
-    after a real download so ``LocalModel.is_downloaded()`` returns True.
+    Mirrors what faster-whisper writes after a real download so
+    ``LocalModel.is_downloaded(download_root)`` returns True. Pins the
+    factory's platformdirs default to ``tmp_path`` so the Models page
+    panel resolves there during construction.
     """
-    monkeypatch.setenv("HF_HOME", str(tmp_path))
-    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    monkeypatch.setattr(
+        "murmur.transcribe.factory.default_local_download_root",
+        lambda: tmp_path,
+    )
     cache_dir = tmp_path / f"models--Systran--faster-whisper-{model_id}"
     cache_dir.mkdir(parents=True)
     (cache_dir / "model.bin").write_bytes(b"fake-weights")
@@ -163,7 +167,10 @@ def _seed_fake_cache(monkeypatch, tmp_path, model_id: str):
 
 def test_delete_button_hidden_when_not_downloaded(qapp, monkeypatch, tmp_path):
     """Fresh model with no cache → only Download is visible."""
-    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "murmur.transcribe.factory.default_local_download_root",
+        lambda: tmp_path,
+    )
     page = ModelsPage(_cfg(model="base"))
     row = page._local_panel._rows["small"]
     assert row._action.text() == "Download"
@@ -262,7 +269,10 @@ def test_fresh_install_marks_no_row_active(qapp, monkeypatch, tmp_path):
     """With cfg.local.model='' (the new default), no row paints itself
     active and the Models page lists every shipped model with its real
     Download/Use state."""
-    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "murmur.transcribe.factory.default_local_download_root",
+        lambda: tmp_path,
+    )
     page = ModelsPage(_cfg(model=""))
     panel = page._local_panel
     assert panel.active_model_id == ""
@@ -271,6 +281,9 @@ def test_fresh_install_marks_no_row_active(qapp, monkeypatch, tmp_path):
 
 def test_fresh_install_does_not_render_phantom_custom_row(qapp, monkeypatch, tmp_path):
     """Empty model must not produce a '(custom)' row labelled with ''."""
-    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "murmur.transcribe.factory.default_local_download_root",
+        lambda: tmp_path,
+    )
     page = ModelsPage(_cfg(model=""))
     assert "" not in page._local_panel._rows
