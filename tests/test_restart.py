@@ -1,160 +1,115 @@
-"""Restart logic: reason builder + main-window integration.
+"""Smoke tests for the restart helper.
 
-The user-visible flow used to be a modal "Restart Now / Cancel" dialog —
-that's gone (see #37). The integration tests here now cover the tray-
-notification-then-auto-relaunch path; the modal-flow tests are removed.
+The user-visible restart flow is now a modal in ``main_window``
+(:meth:`MainWindow._confirm_hotkey_restart`) — see #38. This module
+just provides the actual relaunch the modal fires when the user clicks
+Restart. We test the call shape (not the actual exec / Popen).
+
+Two strategies live in the same function:
+
+- macOS ``.app`` bundles use ``open -na <bundle>`` because ``os.execv``
+  keeps the parent's Process Serial Number and LaunchServices silently
+  refuses to register the relaunched instance.
+- Dev mode (``python -m murmur``) and any non-darwin platform fall back
+  to ``os.execv``.
 """
 from __future__ import annotations
 
-import os
 import sys
+from unittest.mock import patch
 
-import pytest
+from murmur.restart import _default_relaunch, _find_app_bundle_root
 
-pytest.importorskip("PySide6")
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon  # noqa: E402
-
-from murmur import config as config_mod  # noqa: E402
-from murmur.main_window import MainWindow  # noqa: E402
-from murmur.restart import restart_reasons  # noqa: E402
+# --- _find_app_bundle_root -----------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    yield QApplication.instance() or QApplication(sys.argv)
+def test_find_bundle_returns_none_off_darwin():
+    with patch.object(sys, "platform", "linux"):
+        assert _find_app_bundle_root() is None
 
 
-def _cfg() -> config_mod.Config:
-    return config_mod.Config()
+def test_find_bundle_walks_up_to_dot_app(tmp_path):
+    # Lay out a fake bundle: <tmp>/Murmur.app/Contents/MacOS/Murmur
+    bundle = tmp_path / "Murmur.app"
+    binary = bundle / "Contents" / "MacOS" / "Murmur"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    with (
+        patch.object(sys, "platform", "darwin"),
+        patch.object(sys, "executable", str(binary)),
+    ):
+        assert _find_app_bundle_root() == str(bundle)
 
 
-class _FakeTray:
-    def __init__(self) -> None:
-        self.messages: list[tuple[str, str, object, int]] = []
-
-    def showMessage(  # noqa: N802 (Qt API)
-        self,
-        title: str,
-        body: str,
-        icon: object = QSystemTrayIcon.MessageIcon.Information,
-        msecs: int = 0,
-    ) -> None:
-        self.messages.append((title, body, icon, msecs))
+def test_find_bundle_returns_none_when_no_dot_app_ancestor(tmp_path):
+    # Plain /usr/local/bin/python-style layout — nothing ends in .app.
+    binary = tmp_path / "bin" / "python"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    with (
+        patch.object(sys, "platform", "darwin"),
+        patch.object(sys, "executable", str(binary)),
+    ):
+        assert _find_app_bundle_root() is None
 
 
-# ---------- pure logic --------------------------------------------------
+# --- _default_relaunch ---------------------------------------------------
 
 
-def test_no_change_no_reason():
-    assert restart_reasons(_cfg(), _cfg()) == []
+def test_default_relaunch_uses_open_for_dot_app_bundle(tmp_path):
+    """In a PyInstaller .app, plain os.execv keeps the parent's Process
+    Serial Number and LaunchServices silently drops the relaunched
+    instance. ``open -na`` gets us a fresh PSN."""
+    import pytest
+
+    bundle = str(tmp_path / "Murmur.app")
+    # In production sys.exit raises SystemExit and the function never
+    # reaches os.execv. Mirror that by giving the patched exit the same
+    # raising behaviour, otherwise control falls through and os.execv
+    # runs anyway.
+    with (
+        patch("murmur.restart._find_app_bundle_root", return_value=bundle),
+        patch("murmur.restart.subprocess.Popen") as popen_mock,
+        patch("murmur.restart.sys.exit", side_effect=SystemExit) as exit_mock,
+        patch("murmur.restart.os.execv") as execv_mock,
+        patch("murmur.restart.QApplication.instance", return_value=None),
+        pytest.raises(SystemExit),
+    ):
+        _default_relaunch()
+
+    popen_mock.assert_called_once_with(["open", "-na", bundle])
+    exit_mock.assert_called_once_with(0)
+    execv_mock.assert_not_called()
 
 
-def test_backend_swap_calls_out_provider_change():
-    a = _cfg()
-    b = _cfg()
-    b.backend = "openai"
-    assert restart_reasons(a, b) == ["the model provider change"]
+def test_default_relaunch_falls_back_to_execv_outside_a_bundle():
+    """Dev mode (`python -m murmur`) has no .app ancestor — replace the
+    process image directly."""
+    with (
+        patch("murmur.restart._find_app_bundle_root", return_value=None),
+        patch("murmur.restart.os.execv") as execv_mock,
+        patch("murmur.restart.subprocess.Popen") as popen_mock,
+        patch("murmur.restart.QApplication.instance", return_value=None),
+    ):
+        _default_relaunch()
 
-
-def test_local_model_swap_calls_out_model_change():
-    a = _cfg()
-    b = _cfg()
-    b.local.model = "small"
-    assert restart_reasons(a, b) == ["the model change"]
-
-
-def test_openai_model_swap_only_counts_when_backend_is_openai():
-    a = _cfg()
-    a.backend = "openai"
-    b = _cfg()
-    b.backend = "openai"
-    b.openai.model = "gpt-4o-transcribe"
-    assert restart_reasons(a, b) == ["the model change"]
-
-
-def test_local_model_change_ignored_when_backend_is_openai():
-    """If the user is using the cloud backend, swapping the local-model
-    placeholder shouldn't pop a restart prompt."""
-    a = _cfg()
-    a.backend = "openai"
-    b = _cfg()
-    b.backend = "openai"
-    b.local.model = "small"
-    assert restart_reasons(a, b) == []
-
-
-def test_hotkey_change_calls_out_shortcut_change():
-    a = _cfg()
-    b = _cfg()
-    b.hotkey = "<f9>"
-    assert restart_reasons(a, b) == ["the shortcut change"]
-
-
-def test_provider_change_takes_precedence_over_model_field():
-    """Switching local→openai should report the provider reason, not
-    duplicate-report a stale model field."""
-    a = _cfg()
-    b = _cfg()
-    b.backend = "openai"
-    b.local.model = "small"
-    assert restart_reasons(a, b) == ["the model provider change"]
-
-
-# ---------- main_window integration -------------------------------------
-
-
-def test_persist_does_not_relaunch_on_model_change(qapp):
-    """Post-#45: switching the active local model rides
-    MurmurApp.reload_config's selective transcriber drop (PR #44) instead
-    of an os.execv. The Models-page-level integration belongs here; the
-    per-axis breakdown lives in tests/test_main_window.py."""
-    saved: list[config_mod.Config] = []
-    relaunches: list[None] = []
-    tray = _FakeTray()
-
-    cfg = _cfg()
-    win = MainWindow(
-        cfg,
-        save_config=saved.append,
-        tray=tray,
-        relaunch_fn=lambda: relaunches.append(None),
-        restart_delay_ms=0,
+    execv_mock.assert_called_once_with(
+        sys.executable, [sys.executable, *sys.argv]
     )
-
-    # Simulate the user changing the local model on the Models page.
-    win.models_page._local_panel._select_model("small")
-    win._persist_changes()
-
-    assert saved and saved[-1].local.model == "small"
-    QTest.qWait(20)
-    assert tray.messages == []
-    assert relaunches == []
+    popen_mock.assert_not_called()
 
 
-def test_persist_no_notification_when_only_unrelated_pref_changes(qapp):
-    saved: list[config_mod.Config] = []
-    relaunches: list[None] = []
-    tray = _FakeTray()
+def test_default_relaunch_quits_qapplication_first_when_present():
+    """When a QApplication is alive we ask it to quit before relaunching —
+    lets Qt run any cleanup it needs."""
+    fake_app = type("FakeApp", (), {"quit_called": False})
+    fake_app.quit = lambda self=fake_app: setattr(fake_app, "quit_called", True)
 
-    cfg = _cfg()
-    original_auto_paste = cfg.auto_paste
-    win = MainWindow(
-        cfg,
-        save_config=saved.append,
-        tray=tray,
-        relaunch_fn=lambda: relaunches.append(None),
-        restart_delay_ms=0,
-    )
+    with (
+        patch("murmur.restart._find_app_bundle_root", return_value=None),
+        patch("murmur.restart.os.execv"),
+        patch("murmur.restart.QApplication.instance", return_value=fake_app),
+    ):
+        _default_relaunch()
 
-    # Toggle auto-paste — config persists but no restart should be requested.
-    win.home_page.auto_paste.setChecked(not original_auto_paste)
-    win._persist_changes()
-
-    QTest.qWait(20)
-    assert saved and saved[-1].auto_paste != original_auto_paste
-    assert tray.messages == []
-    assert relaunches == []
+    assert fake_app.quit_called is True
