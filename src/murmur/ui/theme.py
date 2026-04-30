@@ -182,11 +182,11 @@ def _stylesheet(p: Palette) -> str:
         background: {p.window};
     }}
 
-    /* Brand header at the top of the left rail */
+    /* Brand header at the top of the left rail. No bottom border —
+       we want the brand area, the nav list, and the About row to read
+       as one flat surface, not three stacked panels. */
     QWidget#brandHeader {{
         background: {p.rail_bg};
-        border-right: 1px solid {p.border};
-        border-bottom: 1px solid {p.border};
     }}
     QLabel#brandText {{
         color: {p.text};
@@ -211,12 +211,13 @@ def _stylesheet(p: Palette) -> str:
         border-color: {p.text_muted};
     }}
 
-    /* Left-rail navigation */
+    /* Left-rail navigation. Drop the right border too so the rail
+       blends into the content area as a single quiet surface — Linear
+       / Arc style — rather than reading as a panel with hard edges. */
     QListWidget#nav {{
         background: {p.rail_bg};
         color: {p.rail_text};
         border: none;
-        border-right: 1px solid {p.border};
         padding: 12px 8px;
         outline: 0;
     }}

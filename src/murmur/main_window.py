@@ -51,9 +51,25 @@ from .ui.theme import DARK, LIGHT, apply_theme, scroll_wrap
 
 _log = get_logger("main_window")
 
-# The icon ships with the repo at assets/icon.png — resolve once so unit
-# tests don't have to mock anything when constructing the main window.
-_ICON_PATH = Path(__file__).resolve().parents[2] / "assets" / "icon.png"
+
+def _assets_dir() -> Path:
+    """Return the directory containing bundled icon assets.
+
+    Two cases:
+    - Dev / installed-via-pip: ``__file__`` lives in ``src/murmur/`` and
+      assets is at the repo root (parents[2] = repo root).
+    - PyInstaller bundle: ``sys._MEIPASS`` points at the runtime extract
+      dir; ``--add-data assets:assets`` puts the assets directory there.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "assets"
+    return Path(__file__).resolve().parents[2] / "assets"
+
+
+_ICON_PATH = _assets_dir() / "icon.png"
+_WORDMARK_DARK_PATH = _assets_dir() / "wordmark_dark.png"
+_WORDMARK_LIGHT_PATH = _assets_dir() / "wordmark_light.png"
 
 
 class MainWindow(QMainWindow):
@@ -161,43 +177,62 @@ class MainWindow(QMainWindow):
     # ----- Construction helpers -------------------------------------------
 
     def _build_brand_header(self) -> QWidget:
-        """Top-of-rail brand bar: app icon + 'Murmur' wordmark.
+        """Top-of-rail brand bar: μ silhouette + 'Murmur' wordmark.
+
+        The orange-square app icon lives in Finder / the Dock; for the
+        in-app rail we use a quieter monochrome μ silhouette that
+        adapts to the active theme (dark glyph on light surfaces, light
+        glyph on dark). The orange square next to the wordmark felt
+        louder than the rest of the chrome.
 
         With the macOS title bar hidden, the traffic-light buttons
         (close / minimize / maximize) overlay the top-left of the
         window — roughly 70 px wide × 28 px tall. The brand header
-        therefore reserves 28 px of top padding so its content sits
-        below the traffic-light strip and doesn't get covered.
+        reserves 28 px of top padding so its content sits below the
+        traffic-light strip and doesn't get covered.
 
-        Falls back gracefully when the icon asset is missing — useful
-        for unit tests that don't always have repo assets on disk.
+        Falls back gracefully when the wordmark asset is missing.
         """
         header = QWidget()
         header.setObjectName("brandHeader")
-        # Total height = 28 (traffic-light reserve) + 36 (content row).
         header.setFixedHeight(64)
         layout = QHBoxLayout(header)
-        # Left margin shifts content past where the traffic lights sit;
-        # top margin pushes them below the title-bar strip.
         layout.setContentsMargins(16, 28, 16, 0)
         layout.setSpacing(10)
 
-        icon_label = QLabel()
-        icon_label.setFixedSize(28, 28)
-        if _ICON_PATH.exists():
-            pixmap = QPixmap(str(_ICON_PATH)).scaled(
-                28, 28,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            icon_label.setPixmap(pixmap)
-        layout.addWidget(icon_label)
+        self._brand_glyph = QLabel()
+        self._brand_glyph.setFixedSize(24, 24)
+        self._refresh_brand_glyph()
+        layout.addWidget(self._brand_glyph)
 
         wordmark = QLabel("Murmur")
         wordmark.setObjectName("brandText")
         layout.addWidget(wordmark)
         layout.addStretch(1)
         return header
+
+    def _refresh_brand_glyph(self) -> None:
+        """Pick the wordmark variant that contrasts with the active
+        palette: dark glyph for LIGHT, light glyph for DARK.
+
+        Re-runnable so :meth:`set_theme` can flip the asset alongside
+        the stylesheet.
+        """
+        if not hasattr(self, "_brand_glyph"):
+            return
+        path = (
+            _WORDMARK_DARK_PATH
+            if self._active_palette is LIGHT
+            else _WORDMARK_LIGHT_PATH
+        )
+        if not path.exists():
+            return
+        pixmap = QPixmap(str(path)).scaled(
+            24, 24,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._brand_glyph.setPixmap(pixmap)
 
     def _build_bottom_rail_section(self) -> QWidget:
         """About row flush at the bottom of the left rail.
@@ -265,9 +300,8 @@ class MainWindow(QMainWindow):
 
         Re-applies the global stylesheet via :func:`apply_theme` so every
         widget picks up the new palette without having to be reconstructed.
-        Driven by the Home → Preferences ``Dark mode`` checkbox (signal
-        ``HomePage.theme_toggle_requested``). Session-scoped — not
-        persisted to config (separate follow-up)."""
+        Also flips the brand-glyph wordmark asset to the variant that
+        contrasts with the new palette."""
         new_palette = DARK if want_dark else LIGHT
         if new_palette is self._active_palette:
             return
@@ -275,6 +309,7 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, new_palette)
         self._active_palette = new_palette
+        self._refresh_brand_glyph()
 
     # ----- macOS title bar ------------------------------------------------
 
@@ -325,6 +360,12 @@ class MainWindow(QMainWindow):
             window.setStyleMask_(
                 window.styleMask() | NSWindowStyleMaskFullSizeContentView,
             )
+            # Without an explicit title bar, the user has to be able to
+            # drag the window from somewhere — empty rail areas, the
+            # brand header, etc. ``setMovableByWindowBackground:`` lets
+            # the user click-and-drag any non-interactive surface to
+            # move the window.
+            window.setMovableByWindowBackground_(True)
         except Exception as e:  # noqa: BLE001
             _log.warning("could not configure macOS title bar: %s", e)
 

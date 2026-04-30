@@ -175,7 +175,9 @@ def test_home_summary_says_pick_a_model_when_local_is_empty(qapp):
     )
     win = MainWindow(cfg, save_config=lambda _c: None)
     text = win.home_page._summary.text()
-    assert "(none" in text and "Models" in text
+    # Empty model → fallback prompts the user to pick one. The exact
+    # copy ("pick one in Models") is the user-facing string we ship.
+    assert "Models" in text and "pick" in text
 
 
 def test_close_event_hides_instead_of_quitting(qapp):

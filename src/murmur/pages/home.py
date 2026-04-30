@@ -35,6 +35,26 @@ from ..ui.theme import (
 )
 from ..ui.widgets import preference_row
 
+
+def _humanize_local_model(model_id: str) -> str:
+    """Turn a faster-whisper model id into something readable.
+
+    Examples:
+        ``base`` → ``Base``
+        ``tiny.en`` → ``Tiny (English)``
+        ``distil-large-v3`` → ``Distil Large v3``
+        ``large-v3`` → ``Large v3``
+    """
+    name = model_id
+    suffix = ""
+    if name.endswith(".en"):
+        name = name[: -len(".en")]
+        suffix = " (English)"
+    parts = name.replace("_", "-").split("-")
+    pretty = " ".join(p.title() if not p.startswith("v") else p for p in parts)
+    return pretty + suffix
+
+
 _STATE_LABELS = {
     State.IDLE: ("Idle", STATE_IDLE),
     State.RECORDING: ("Recording", STATE_RECORDING),
@@ -330,16 +350,32 @@ class HomePage(QWidget):
             pyperclip.copy(full_text)
 
     def _refresh_summary(self) -> None:
+        """Render the dim sub-line under the Status hero in plain English.
+
+        The previous text was ``Hotkey <fn> · Backend local · Model
+        tiny.en`` — angle-bracket spec syntax + raw provider IDs reads
+        too technical for an end-user UI. This version uses
+        :func:`hotkey_recorder.humanize` for the key spec and friendly
+        labels for the backend / model.
+        """
+        from ..hotkey_recorder import humanize
+
+        hotkey_pretty = humanize(self._cfg.hotkey)
         if self._cfg.backend == "local":
-            model = self._cfg.local.model or "(none — pick one in Models)"
-            backend_label = "local"
+            backend_label = "On-device"
+            model = (
+                _humanize_local_model(self._cfg.local.model)
+                if self._cfg.local.model
+                else "(pick one in Models)"
+            )
         else:
-            # Cloud: surface which provider is active so the user can
-            # tell openai apart from a custom MiniMax/Groq endpoint.
-            backend_label = f"cloud ({self._cfg.cloud_provider_id})"
             from .. import providers as providers_mod
 
             provider = providers_mod.get_cloud(self._cfg.cloud_provider_id)
+            backend_label = (
+                provider.label if provider is not None
+                else self._cfg.cloud_provider_id.title()
+            )
             if self._cfg.cloud_provider_id == "openai":
                 model = self._cfg.openai.model
             elif provider is not None:
@@ -347,8 +383,7 @@ class HomePage(QWidget):
             else:
                 model = "(unknown)"
         self._summary.setText(
-            f"Hotkey {self._cfg.hotkey}  ·  Backend {backend_label}  "
-            f"·  Model {model}",
+            f"{hotkey_pretty}  ·  {backend_label}  ·  {model}",
         )
 
 
