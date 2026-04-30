@@ -194,35 +194,25 @@ class MainWindow(QMainWindow):
         return header
 
     def _build_bottom_rail_section(self) -> QWidget:
-        """About row + theme-toggle button at the bottom of the left rail.
+        """Theme toggle + About row at the bottom of the left rail.
 
-        Two-piece layout: the About item lives in its own QListWidget so
-        it inherits the same selected-row styling as the top nav, and
-        the theme toggle sits below as a small button. We connect the
-        About list's selection to the unified nav slot so picking About
-        clears the top-nav highlight and the stack flips to page 3.
+        Theme toggle sits above About so About is flush at the very
+        bottom of the rail (per user feedback — "About should be at the
+        bottom of the bar"). The About item lives in its own
+        QListWidget so it inherits the same selected-row styling as the
+        top nav. We connect its selection to the unified nav slot so
+        picking About clears the top-nav highlight and the stack flips
+        to page 3.
         """
         section = QWidget()
         layout = QVBoxLayout(section)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._nav_bottom = QListWidget()
-        self._nav_bottom.setObjectName("nav")
-        self._nav_bottom.addItem(QListWidgetItem("About"))
-        # No "current row" until the user clicks About — we keep the
-        # selection clear so picking About is a deliberate jump.
-        self._nav_bottom.setCurrentRow(-1)
-        self._nav_bottom.itemSelectionChanged.connect(
-            self._on_bottom_nav_changed,
-        )
-        layout.addWidget(self._nav_bottom)
-
-        # Theme toggle. Unicode glyph that flips between the two
-        # alternatives — clicking shows the *target* state's icon, not
-        # the current state's, so the affordance reads as "switch to X."
+        # Theme toggle — sits above About so About lands flush at the
+        # very bottom of the rail.
         toggle_row = QHBoxLayout()
-        toggle_row.setContentsMargins(12, 8, 12, 12)
+        toggle_row.setContentsMargins(12, 8, 12, 8)
         toggle_row.setSpacing(0)
         self._theme_toggle = QPushButton()
         self._theme_toggle.setObjectName("themeToggle")
@@ -230,8 +220,32 @@ class MainWindow(QMainWindow):
         self._theme_toggle.clicked.connect(self._toggle_theme)
         toggle_row.addWidget(self._theme_toggle, 1)
         layout.addLayout(toggle_row)
-        # Defer the initial label-set until apply_theme has run so we
-        # know which palette is active.
+
+        self._nav_bottom = QListWidget()
+        self._nav_bottom.setObjectName("nav")
+        self._nav_bottom.addItem(QListWidgetItem("About"))
+        # No "current row" until the user clicks About — we keep the
+        # selection clear so picking About is a deliberate jump.
+        self._nav_bottom.setCurrentRow(-1)
+        # Constrain to one-row height so the About item sits flush at
+        # the bottom of the rail. Without this, QListWidget claims its
+        # default sizeHint (~150 px) and About appears halfway up the
+        # rail with empty space below.
+        self._nav_bottom.setFixedHeight(48)
+        # No scrollbar, no frame — it's a single decorative row.
+        self._nav_bottom.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        self._nav_bottom.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        self._nav_bottom.setFrameShape(QListWidget.Shape.NoFrame)
+        self._nav_bottom.itemSelectionChanged.connect(
+            self._on_bottom_nav_changed,
+        )
+        layout.addWidget(self._nav_bottom)
+
+        # Initial label depends on the active palette.
         self._refresh_theme_toggle_label()
         return section
 
