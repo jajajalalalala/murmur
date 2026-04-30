@@ -90,6 +90,16 @@ class Config:
     # PortAudio index) because indices reshuffle when devices come and
     # go between runs.
     input_device: str = ""
+    # Onboarding wizard completion flag. False (default) means the
+    # 4-step wizard fires on app launch; True means the user has
+    # either completed or explicitly skipped the wizard. The wizard
+    # itself flips this to True on its final step and on any "Skip
+    # all" path. Existing users with a pre-onboarding config.toml
+    # see ``onboarded=False`` on first read; we treat ``backend !=
+    # ""`` (i.e. they already have a working setup) as implicit
+    # onboarded so we don't re-onboard people who've been running
+    # Murmur for months — see ``load`` for the migration.
+    onboarded: bool = False
     local: LocalBackendConfig = field(default_factory=LocalBackendConfig)
     openai: OpenAIBackendConfig = field(default_factory=OpenAIBackendConfig)
     # User-added cloud providers (curated entries live in
@@ -127,6 +137,15 @@ def load() -> Config:
         play_beeps=data.get("play_beeps", True),
         dark_mode=data.get("dark_mode", False),
         input_device=data.get("input_device", ""),
+        # Migration: a config.toml that pre-dates the onboarded flag
+        # belongs to a user who's been running Murmur for a while —
+        # don't fire the wizard at them. We treat the presence of any
+        # explicit ``local.model`` (i.e. they actually picked a model)
+        # as proof they've completed the equivalent of onboarding.
+        onboarded=data.get(
+            "onboarded",
+            bool((data.get("local") or {}).get("model")),
+        ),
         local=LocalBackendConfig(**data.get("local", {})),
         openai=OpenAIBackendConfig(**data.get("openai", {})),
         custom_cloud=[
