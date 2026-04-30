@@ -18,6 +18,36 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     assert cfg2.language == "en"
 
 
+def test_fresh_install_is_not_onboarded(tmp_path, monkeypatch):
+    """A clean install starts with onboarded=False so the wizard fires
+    on first launch (#20)."""
+    monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+    cfg = config_mod.load()
+    assert cfg.onboarded is False
+
+
+def test_existing_install_with_a_model_is_implicitly_onboarded(tmp_path, monkeypatch):
+    """Migration: a config.toml that pre-dates the onboarded flag but
+    has a local.model already picked is treated as onboarded — the
+    user is mid-flight and we don't want to interrupt them with a
+    wizard for things they've already done."""
+    monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+    legacy = b'backend = "local"\n[local]\nmodel = "base"\n'
+    (tmp_path / "config.toml").write_bytes(legacy)
+    cfg = config_mod.load()
+    assert cfg.onboarded is True
+
+
+def test_existing_install_without_a_model_still_runs_wizard(tmp_path, monkeypatch):
+    """A pre-flag config without a picked model is treated as not
+    onboarded so the wizard helps them finish setup."""
+    monkeypatch.setattr(config_mod, "config_path", lambda: tmp_path / "config.toml")
+    legacy = b'backend = "local"\n[local]\nmodel = ""\n'
+    (tmp_path / "config.toml").write_bytes(legacy)
+    cfg = config_mod.load()
+    assert cfg.onboarded is False
+
+
 def test_legacy_openai_backend_is_migrated_to_cloud(tmp_path, monkeypatch):
     """Pre-#17 configs stored ``backend = "openai"`` directly. Loading
     them should transparently produce the new (cloud, openai) shape so

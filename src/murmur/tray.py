@@ -187,6 +187,22 @@ def run_tray(cfg: config_mod.Config) -> int:
         print("System tray not available on this platform.", file=sys.stderr)
         return 1
 
+    # Onboarding wizard runs *before* the input-monitoring/accessibility
+    # check on a fresh install — its first step covers both permissions
+    # in a friendlier flow than the bare "needs permission" QMessageBox.
+    # The legacy ``_hint_accessibility_if_denied`` still fires on
+    # subsequent launches if a returning user revoked the permission.
+    if not cfg.onboarded:
+        from .onboarding import OnboardingWizard
+
+        wizard = OnboardingWizard(cfg)
+        wizard.exec()
+        result = wizard.result()
+        cfg = result.cfg  # picks up model / hotkey / onboarded
+        # Re-apply theme in case the wizard somehow changed it (it
+        # doesn't today; cheap insurance).
+        apply_theme(app, DARK if cfg.dark_mode else LIGHT)
+
     if not _ensure_input_monitoring():
         return 2
 
