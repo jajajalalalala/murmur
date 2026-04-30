@@ -2,7 +2,8 @@
 
 A provider is either:
   - ``local`` — a faster-whisper model that runs on the user's machine
-    (no key, no network; downloads to the HuggingFace cache on first use).
+    (no key, no network; downloads into Murmur's private model store —
+    see ``transcribe.factory.default_local_download_root``).
   - ``openai_compatible`` — a hosted whisper-style endpoint reachable over
     HTTP with the OpenAI Python client (set ``base_url`` to point at the
     vendor; OpenAI itself uses ``base_url=None``).
@@ -32,21 +33,33 @@ class LocalModel:
     size_mb: int
     multilingual: bool
 
-    def cache_path(self) -> Path:
-        """Path the HuggingFace hub uses for this faster-whisper model.
+    def cache_path(self, download_root: str | os.PathLike[str] | None = None) -> Path:
+        """Path faster-whisper writes this model to under ``download_root``.
 
-        We use existence of this dir as a "downloaded" signal in the UI.
-        Mirrors what faster-whisper does internally on first instantiation.
+        Used both to surface a "downloaded" signal in the UI and to drive
+        the inline download progress bar. faster-whisper composes the
+        per-model directory the same way HuggingFace's hub does:
+        ``<root>/models--Systran--faster-whisper-<id>``.
+
+        ``download_root`` is the resolved Murmur-private path (see
+        ``transcribe.factory._resolve_local_download_root``). When
+        ``None`` we fall back to the legacy HF cache resolution so
+        early-boot callers — e.g. the Models page constructing rows
+        before a config is plumbed in — still find pre-v0.6 downloads.
+        New callers should always pass an explicit root.
         """
-        cache_root = Path(
-            os.environ.get("HF_HOME")
-            or os.environ.get("HUGGINGFACE_HUB_CACHE")
-            or Path.home() / ".cache" / "huggingface" / "hub"
-        )
+        if download_root is not None:
+            cache_root = Path(download_root)
+        else:
+            cache_root = Path(
+                os.environ.get("HF_HOME")
+                or os.environ.get("HUGGINGFACE_HUB_CACHE")
+                or Path.home() / ".cache" / "huggingface" / "hub"
+            )
         return cache_root / f"models--Systran--faster-whisper-{self.id}"
 
-    def is_downloaded(self) -> bool:
-        path = self.cache_path()
+    def is_downloaded(self, download_root: str | os.PathLike[str] | None = None) -> bool:
+        path = self.cache_path(download_root)
         # Empty dirs (cancelled downloads) shouldn't count as ready.
         return path.is_dir() and any(path.iterdir())
 

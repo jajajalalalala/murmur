@@ -1,8 +1,47 @@
 """Build a Transcriber from config."""
 from __future__ import annotations
 
+from pathlib import Path
+
+from platformdirs import user_data_dir
+
 from .. import config as cfg_mod
 from .base import Transcriber
+
+# Subdirectory under ``platformdirs.user_data_dir("Murmur")`` where
+# faster-whisper writes downloaded models. Kept as a module-level
+# constant so tests and uninstall.py can reference the same value.
+_MODELS_SUBDIR = "models"
+
+
+def default_local_download_root() -> Path:
+    """Murmur's private model store path (no I/O).
+
+    macOS:   ~/Library/Application Support/Murmur/models
+    Windows: %LOCALAPPDATA%\\Murmur\\models
+    Linux:   ~/.local/share/Murmur/models
+
+    The directory is *not* created here — callers that actually need it
+    (factory.build, uninstall) call ``_resolve_local_download_root``
+    which creates it on demand.
+    """
+    return Path(user_data_dir(cfg_mod.APP_NAME)) / _MODELS_SUBDIR
+
+
+def _resolve_local_download_root(cfg: cfg_mod.Config) -> str:
+    """Resolve cfg.local.download_root to an existing on-disk directory.
+
+    Empty-string config (the default) maps to the platformdirs path so
+    we don't have to migrate existing TOML files when this lands. Any
+    non-empty value is honored verbatim — power users can point Murmur
+    at an external drive or a shared location.
+
+    The returned path is guaranteed to exist (mkdir parents/exist_ok).
+    """
+    configured = cfg.local.download_root.strip() if cfg.local.download_root else ""
+    root = Path(configured) if configured else default_local_download_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
 
 
 def build(cfg: cfg_mod.Config) -> Transcriber:
@@ -21,6 +60,7 @@ def build(cfg: cfg_mod.Config) -> Transcriber:
             model=cfg.local.model,
             device=cfg.local.device,
             compute_type=cfg.local.compute_type,
+            download_root=_resolve_local_download_root(cfg),
         )
     if cfg.backend == "openai":
         from .. import secrets

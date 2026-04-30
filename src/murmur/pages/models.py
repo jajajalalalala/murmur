@@ -43,6 +43,7 @@ from ..providers import (
     find_cloud_provider,
     find_local_model,
 )
+from ..transcribe.factory import _resolve_local_download_root
 from ..ui.theme import card, primary_button, section_label
 
 _log = get_logger("models_page")
@@ -60,9 +61,10 @@ class _DownloadWorker(QObject):
 
     finished = Signal(str, bool, str)  # (model_id, ok, error_message)
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, download_root: str) -> None:
         super().__init__()
         self.model_id = model_id
+        self.download_root = download_root
 
     def run(self) -> None:
         try:
@@ -71,7 +73,12 @@ class _DownloadWorker(QObject):
             # device=cpu, compute_type=int8 is the cheapest "just download"
             # combo that works on every machine. Real transcription uses
             # the user's chosen device/compute_type from cfg.local.
-            WhisperModel(self.model_id, device="cpu", compute_type="int8")
+            WhisperModel(
+                self.model_id,
+                device="cpu",
+                compute_type="int8",
+                download_root=self.download_root,
+            )
         except Exception as e:  # noqa: BLE001
             _log.exception("download failed for %s", self.model_id)
             self.finished.emit(self.model_id, False, str(e))
@@ -88,9 +95,18 @@ class _LocalModelRow(QFrame):
     use_requested = Signal(str)        # model_id
     delete_requested = Signal(str)     # model_id
 
-    def __init__(self, model: LocalModel, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        model: LocalModel,
+        download_root: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.model = model
+        # Murmur-private download root resolved by the factory. Stored on
+        # each row so cache_path()/is_downloaded() always look in the new
+        # location instead of the legacy HF cache.
+        self.download_root = download_root
         self.setProperty("card", True)
 
         row = QHBoxLayout(self)
@@ -177,7 +193,7 @@ class _LocalModelRow(QFrame):
     def _on_action(self) -> None:
         if self._is_downloading:
             return
-        if self.model.is_downloaded():
+        if self.model.is_downloaded(self.download_root):
             self.use_requested.emit(self.model.id)
         else:
             self.download_requested.emit(self.model.id)
@@ -185,12 +201,12 @@ class _LocalModelRow(QFrame):
     def _on_delete(self) -> None:
         if self._is_downloading or self._is_active:
             return
-        if not self.model.is_downloaded():
+        if not self.model.is_downloaded(self.download_root):
             return
         self.delete_requested.emit(self.model.id)
 
     def _refresh(self) -> None:
-        downloaded = self.model.is_downloaded()
+        downloaded = self.model.is_downloaded(self.download_root)
         if self._is_downloading:
             self._action.setEnabled(False)
             self._action.setText("Downloading…")
@@ -243,10 +259,14 @@ class _LocalPanel(QWidget):
         self._rows: dict[str, _LocalModelRow] = {}
         self._active_model_id = cfg.local.model
         self._workers: dict[str, tuple[QThread, _DownloadWorker]] = {}
+        # Resolve the Murmur-private download root once; the panel
+        # passes it down to every row + worker so they all agree on
+        # where models live on disk. Creates the directory if missing.
+        self._download_root = _resolve_local_download_root(cfg)
 
         # Single timer drives every in-flight progress bar — faster-whisper's
         # constructor is opaque, so we estimate progress by polling the size
-        # of the HuggingFace cache directory against the model's known total.
+        # of the on-disk model directory against the model's known total.
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self.POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_progress)
@@ -256,7 +276,7 @@ class _LocalPanel(QWidget):
         layout.setSpacing(8)
 
         for model in LOCAL_MODELS:
-            row = _LocalModelRow(model)
+            row = _LocalModelRow(model, self._download_root)
             row.download_requested.connect(self._start_download)
             row.use_requested.connect(self._select_model)
             row.delete_requested.connect(self._delete_model)
@@ -274,7 +294,7 @@ class _LocalPanel(QWidget):
                 size_mb=0,
                 multilingual=True,
             )
-            row = _LocalModelRow(custom)
+            row = _LocalModelRow(custom, self._download_root)
             row.use_requested.connect(self._select_model)
             row.delete_requested.connect(self._delete_model)
             layout.addWidget(row)
@@ -292,6 +312,12 @@ class _LocalPanel(QWidget):
     def set_config(self, cfg: config_mod.Config) -> None:
         self._cfg = cfg
         self._active_model_id = cfg.local.model
+        # Re-resolve in case the user pointed Murmur at a different
+        # download_root via the TOML; rows pick up the new path on the
+        # next refresh / action.
+        self._download_root = _resolve_local_download_root(cfg)
+        for row in self._rows.values():
+            row.download_root = self._download_root
         self._refresh_active()
 
     # Internals ---------------------------------------------------------
@@ -312,12 +338,12 @@ class _LocalPanel(QWidget):
         if model_id == self._active_model_id:
             return
         row = self._rows.get(model_id)
-        if row is None or not row.model.is_downloaded():
+        if row is None or not row.model.is_downloaded(self._download_root):
             return
         if not _confirm_delete(self, row.model.label):
             return
         try:
-            _delete_model_files(row.model.cache_path())
+            _delete_model_files(row.model.cache_path(self._download_root))
         except OSError as exc:
             _log.warning("failed to delete %s: %s", model_id, exc)
             QMessageBox.warning(
@@ -340,7 +366,7 @@ class _LocalPanel(QWidget):
         row.set_downloading(True)
 
         thread = QThread(self)
-        worker = _DownloadWorker(model_id)
+        worker = _DownloadWorker(model_id, self._download_root)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_download_finished)
@@ -377,7 +403,7 @@ class _LocalPanel(QWidget):
             if row is None or row.model.size_mb <= 0:
                 continue
             target = row.model.size_mb * 1024 * 1024
-            current = _dir_size_bytes(row.model.cache_path())
+            current = _dir_size_bytes(row.model.cache_path(self._download_root))
             if current <= 0:
                 continue
             row.set_progress(current / target)
