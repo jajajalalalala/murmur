@@ -9,6 +9,61 @@ main is protected. Every change goes through:
   branch → commits → push → PR → green CI → squash-merge → delete branch
 ```
 
+## Setup
+
+Murmur uses [uv](https://github.com/astral-sh/uv) for Python and dependency management. You don't need a system Python — `start.sh` installs uv (if missing), pins Python via `.python-version`, creates `.venv/`, and installs everything.
+
+```bash
+git clone https://github.com/jajajalalalala/murmur.git
+cd murmur
+./start.sh                   # default: launches the menu-bar tray app
+./start.sh --cli             # CLI mode (Enter to start/stop)
+./start.sh --setup-only      # install dependencies, don't launch
+./start.sh --reset           # wipe .venv and reinstall
+```
+
+The first run downloads a Whisper model (~150 MB for `base`).
+
+### Show / inspect config
+
+The runtime config lives in a TOML file under `~/Library/Application Support/Murmur/` on macOS. To print its location and current contents:
+
+```bash
+.venv/bin/python -m murmur --show-config
+```
+
+Power users can hand-edit the `hotkey` field directly using [pynput hotkey syntax](https://pynput.readthedocs.io/en/latest/keyboard.html#monitoring-the-keyboard) — e.g. `<f9>`, `<ctrl>+<shift>+<space>`, `<fn>`. The Shortcuts page in the main window covers everything you can reasonably bind, so reach for the TOML only if you're scripting something.
+
+### macOS permissions during dev
+
+Murmur needs **Microphone** and **Input Monitoring** on macOS. Both attach to whichever binary runs the listener:
+
+- Launching via `./start.sh` → the grant attaches to `.venv/bin/python` (or your terminal app, depending on macOS version). It can break when the venv is recreated — re-grant in System Settings if so.
+- Launching `dist/Murmur.app` (see "Build" below) → the grant attaches to the bundle and survives rebuilds. **Recommended for daily use.**
+
+After flipping a permission ON, **quit and relaunch** Murmur — macOS only re-checks at process start.
+
+## Build a standalone `Murmur.app`
+
+```bash
+./build.sh                   # produces dist/Murmur.app
+./build.sh --clean           # wipe dist/ and build/ first
+open dist/Murmur.app         # or drag into /Applications
+```
+
+The build:
+- Bundles Python + all dependencies via PyInstaller — the app runs without any system Python.
+- Generates and embeds the Murmur icon.
+- Sets `LSUIElement=true` so Murmur lives only in the menu bar (no Dock icon).
+- Adds the macOS permission strings so the system prompts are human-readable.
+- **Ad-hoc-codesigns** the bundle so Gatekeeper allows it on your machine.
+
+Tagged releases (`v*`) are built by the [Release workflow](.github/workflows/release.yml) on a `macos-14` runner, wrapped in a `.dmg` via `hdiutil`, and attached to the GitHub Release.
+
+> **Codesigning note:** v1.0 ships ad-hoc-signed only. A real Developer ID + notarization workflow is on the v1.1+ backlog ([ROADMAP.md](ROADMAP.md)). Until then, first-launch users have to right-click → Open.
+
+> **Windows:** packaging support is on the roadmap. For now, run via `./start.sh` on Windows under WSL or Git Bash.
+
 ## Workflow
 
 ### 1. Start from a clean main
@@ -73,6 +128,10 @@ If your change ticks a checkbox in [ROADMAP.md](ROADMAP.md), tick it. If it adds
 - **Unit-testable things** (config, state machine, audio buffer math): cover with `pytest`.
 - **Hardware/permission things** (mic capture, global hotkeys, paste): smoke-test manually on macOS and document in the PR description what you tried.
 
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module layout and data flow, and `docs/adr/` for the locked-in design decisions (provider registry, single OpenAI-compatible transcriber, API-key storage, etc.).
+
 ## Code style
 
 - Python 3.10+ syntax (we pin 3.11 at runtime, but support 3.10 for type-hint use).
@@ -97,8 +156,18 @@ Open an issue with:
 
 - macOS / Windows version
 - Python version (`.venv/bin/python --version`)
-- Output of `murmur --show-config`
+- Output of `python -m murmur --show-config`
 - Steps to reproduce, expected vs. actual
+- Relevant log excerpts from `~/Library/Logs/Murmur/murmur.log`
+
+## Uninstalling (during dev)
+
+```bash
+.venv/bin/python -m murmur --uninstall --dry-run   # preview
+.venv/bin/python -m murmur --uninstall --yes       # actually remove
+```
+
+Wipes config, logs, and downloaded Whisper models. The bundled `Murmur.app` and macOS Privacy & Security entries are listed in the printed plan but not deleted automatically — drag the app to the Trash and revoke the toggles manually.
 
 ## License
 
