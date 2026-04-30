@@ -182,10 +182,14 @@ def _stylesheet(p: Palette) -> str:
         background: {p.window};
     }}
 
-    /* Brand header at the top of the left rail. No bottom border —
-       we want the brand area, the nav list, and the About row to read
-       as one flat surface, not three stacked panels. */
-    QWidget#brandHeader {{
+    /* Whole left rail surface: container + brand header + nav host
+       + bottom (About) row. Each child needs its own selector
+       because Qt stylesheets don't propagate ``background:`` from
+       parent to children — without these rules, only the brand
+       header had ``rail_bg`` and the rest of the rail fell through
+       to the lighter palette ``Window`` color, producing a visible
+       seam between μ Murmur and Home/Shortcuts/Models. */
+    QWidget#rail, QWidget#brandHeader, QWidget#navHost, QWidget#railBottom {{
         background: {p.rail_bg};
     }}
     QLabel#brandText {{

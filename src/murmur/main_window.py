@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         # on the rail. Same fix as the About row in #64.
         self._nav_buttons: list[QPushButton] = []
         nav_host = QWidget()
+        nav_host.setObjectName("navHost")
         nav_layout = QVBoxLayout(nav_host)
         nav_layout.setContentsMargins(8, 8, 8, 0)
         nav_layout.setSpacing(0)
