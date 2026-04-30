@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import platform
 import time
+from collections import deque
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer
@@ -124,21 +125,31 @@ class RecordingHUD(QWidget):
     # bottom" rather than "floating in the middle".
     BOTTOM_MARGIN = 96
 
-    # Visual contract for the three dots in the left cluster.
+    # Visual contract for the 5-bar staggered waveform in the left cluster.
     #
-    # Static baseline (silent / no level provider): 2 px diameter, ~30 % alpha.
-    # When the level rises toward 1.0 the diameter grows to 6 px and the
-    # alpha climbs to 255 — see ``_dot_geometry_for_level`` for the exact
-    # mapping. The baseline numbers are kept here so the silent-mode
-    # rendering remains a regression pin against #14.
-    _DOT_BASELINE_DIAMETER = 2
-    _DOT_PEAK_DIAMETER = 6
-    _DOT_BASELINE_ALPHA = 77  # ~30 % of 255
-    _DOT_PEAK_ALPHA = 255
-    _DOT_COUNT = 3
-    _DOT_CLUSTER_LEFT = 8  # px from left edge of pill to first dot's center column
-    _DOT_CLUSTER_WIDTH = 22  # leaves the cluster occupying the left ~30px
-    _DOT_RGB = (245, 245, 245)  # neutral light gray; alpha is dynamic
+    # Five vertical bars, 2 px wide with a 3 px gap, vertically centered in
+    # the 24 px pill. Each bar reads from its own slot in a 5-element ring
+    # buffer of recent levels — the rightmost bar is the newest sample, the
+    # leftmost is the oldest (~133 ms back at 30 Hz), so voice peaks visibly
+    # travel left-to-right as the user speaks.
+    #
+    # Geometry: height ramps 2 → 18 px (silent → peak), opacity ramps
+    # 127 → 255 (50 % → 100 %). Color is pure white — brighter than the
+    # previous (245, 245, 245) so the waveform reads cleanly against the
+    # dark pill at every level.
+    _BAR_COUNT = 5
+    _BAR_WIDTH = 2
+    _BAR_GAP = 3
+    _BAR_BASELINE_HEIGHT = 2
+    _BAR_PEAK_HEIGHT = 18
+    _BAR_BASELINE_ALPHA = 127  # 50 % of 255
+    _BAR_PEAK_ALPHA = 255
+    _BAR_CLUSTER_LEFT = 8  # px from left edge of pill to first bar's left edge
+    # 5 bars × 2 px + 4 gaps × 3 px = 22 px total horizontal footprint.
+    _BAR_CLUSTER_WIDTH = (
+        _BAR_COUNT * _BAR_WIDTH + (_BAR_COUNT - 1) * _BAR_GAP
+    )
+    _BAR_RGB = (255, 255, 255)  # pure white; alpha is dynamic
 
     def __init__(
         self,
@@ -151,10 +162,19 @@ class RecordingHUD(QWidget):
         ``Recorder`` reference so the HUD stays decoupled from ``audio.py``
         — tests just pass ``lambda: 0.5`` and the production wiring passes
         ``lambda: recorder.current_level``. If ``None`` (or the callable
-        raises), the dots fall back to the static baseline.
+        raises), the bars fall back to the silent baseline.
         """
         super().__init__()
         self._level_provider = level_provider
+        # Ring buffer of recent levels — one slot per bar. Pre-populated
+        # with zeros so a freshly-constructed HUD with no ticks yet renders
+        # all bars at the silent baseline rather than uninitialised noise.
+        # Newest sample is appended to the right; the rightmost bar reads
+        # the newest level and the leftmost reads the oldest still in the
+        # buffer (~133 ms ago at 30 Hz).
+        self._levels: deque[float] = deque(
+            [0.0] * self._BAR_COUNT, maxlen=self._BAR_COUNT
+        )
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -170,11 +190,11 @@ class RecordingHUD(QWidget):
         self.resize(self.WIDTH, self.HEIGHT)
 
         self._t0: float = 0.0
-        # Timer drives repaint() so both the elapsed-time text and the
-        # volume-reactive dots stay current. 33 ms (~30 Hz) is smooth enough
-        # that the dots don't strobe on speech transients; the repaint cost
-        # is one rect + three small ellipses + a short string, so the bump
-        # from 80 ms is essentially free.
+        # Timer drives the level sample + repaint. 33 ms (~30 Hz) is smooth
+        # enough that the bars don't strobe on speech transients; the
+        # repaint cost is one rect + five small rects + a short string.
+        # The cadence also sets the stagger speed: 5 slots × 33 ms = ~165 ms
+        # for a level to traverse from the rightmost bar to the leftmost.
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
@@ -203,7 +223,11 @@ class RecordingHUD(QWidget):
         return level
 
     def _tick(self) -> None:
-        # Just nudge a repaint — only the timer text needs refreshing now.
+        # Sample the level once per tick and push it onto the ring buffer.
+        # Doing the sample here (not in paintEvent) means each bar slot
+        # corresponds to a distinct point in time even if Qt coalesces
+        # repaints — the stagger is driven by the timer, not the painter.
+        self._levels.append(self._current_level())
         self.update()
 
     def show_at_bottom_center(self) -> None:
@@ -237,38 +261,38 @@ class RecordingHUD(QWidget):
         p.setBrush(QColor(18, 18, 22, 235))
         p.drawRoundedRect(self.rect(), 12, 12)
 
-        # Three dots in the left cluster, driven by live mic volume.
-        # At level=0 they match #14's static baseline (2 px, ~30 % alpha);
-        # any sound expands and brightens them linearly up to (6 px, 100 %)
-        # at level=1. No VAD threshold — silence is just zero level.
-        level = self._current_level()
-        # radius = 1 + 2 * level → diameter 2..6 px as level 0..1
-        radius_px = 1.0 + 2.0 * level
-        diameter_px = int(round(2.0 * radius_px))
-        alpha = self._DOT_BASELINE_ALPHA + int(round(
-            (self._DOT_PEAK_ALPHA - self._DOT_BASELINE_ALPHA) * level
-        ))
-        r, g, b = self._DOT_RGB
-        p.setBrush(QColor(r, g, b, alpha))
-        # Evenly space N dots across the cluster band: positions land at
-        # i / (N - 1) of the band's interior. The cluster's center column
-        # is anchor-stable as the dots breathe — we draw each ellipse
-        # centered on (anchor_x, anchor_y) so growth radiates from the dot's
-        # midpoint rather than its top-left corner.
-        anchor_y = self.HEIGHT // 2
-        step = (
-            self._DOT_CLUSTER_WIDTH / (self._DOT_COUNT - 1)
-            if self._DOT_COUNT > 1
-            else 0
-        )
-        # Anchor each baseline dot at the same x as before by shifting the
-        # cluster origin half a baseline-diameter to the right.
-        anchor_left = self._DOT_CLUSTER_LEFT + self._DOT_BASELINE_DIAMETER // 2
-        for i in range(self._DOT_COUNT):
-            anchor_x = anchor_left + int(round(i * step))
-            top_left_x = anchor_x - diameter_px // 2
-            top_left_y = anchor_y - diameter_px // 2
-            p.drawEllipse(top_left_x, top_left_y, diameter_px, diameter_px)
+        # 5-bar staggered waveform driven by the level ring buffer.
+        # Each bar reads its own slot — the rightmost is the newest sample
+        # and the leftmost is the oldest still in the buffer. Voice peaks
+        # therefore visibly travel left-to-right as the user speaks. At
+        # level=0 every bar collapses to the 2 px / 50 % alpha silent
+        # baseline; at level=1 it reaches 18 px / 100 %.
+        r, g, b = self._BAR_RGB
+        center_y = self.HEIGHT // 2
+        # Snapshot the deque so concurrent _tick() appends can't shift the
+        # mapping mid-paint. deque is index-cheap; the copy is 5 floats.
+        slot_levels = list(self._levels)
+        for i in range(self._BAR_COUNT):
+            slot_level = slot_levels[i]
+            # Defensive clamp — _current_level already clamps, but the
+            # ring buffer could in principle contain a stale out-of-range
+            # value if the contract ever changes.
+            if slot_level < 0.0:
+                slot_level = 0.0
+            elif slot_level > 1.0:
+                slot_level = 1.0
+            bar_height = self._BAR_BASELINE_HEIGHT + int(
+                (self._BAR_PEAK_HEIGHT - self._BAR_BASELINE_HEIGHT) * slot_level
+            )
+            bar_alpha = self._BAR_BASELINE_ALPHA + int(
+                (self._BAR_PEAK_ALPHA - self._BAR_BASELINE_ALPHA) * slot_level
+            )
+            bar_left = self._BAR_CLUSTER_LEFT + i * (
+                self._BAR_WIDTH + self._BAR_GAP
+            )
+            bar_top = center_y - bar_height // 2
+            p.setBrush(QColor(r, g, b, bar_alpha))
+            p.drawRect(bar_left, bar_top, self._BAR_WIDTH, bar_height)
 
         # Elapsed-time readout — adaptive format keeps the pill narrow.
         p.setPen(QColor(245, 245, 245, 235))
@@ -278,9 +302,9 @@ class RecordingHUD(QWidget):
         p.setFont(font)
         elapsed = max(0.0, time.monotonic() - self._t0)
         text = _format_elapsed(elapsed)
-        # Reserve the left cluster for dots, right edge gets a small inset
+        # Reserve the left cluster for bars, right edge gets a small inset
         # so the text doesn't crowd the pill's rounded corner.
-        text_left = self._DOT_CLUSTER_LEFT + self._DOT_CLUSTER_WIDTH + 6
+        text_left = self._BAR_CLUSTER_LEFT + self._BAR_CLUSTER_WIDTH + 6
         p.drawText(
             self.rect().adjusted(text_left, 0, -8, 0),
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
