@@ -127,71 +127,149 @@ def test_format_elapsed_negative_clamps_to_zero():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Volume-reactive dots — exercise the level→radius/alpha mapping.
+# 5-bar staggered waveform — ring-buffer + per-slot height/alpha mapping.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _render_to_pixmap(hud: RecordingHUD) -> QPixmap:
     pixmap = QPixmap(hud.size())
-    pixmap.fill()  # white background so we can find the dot pixels
+    pixmap.fill()  # white background so we can find the bar pixels
     hud.render(pixmap)
     return pixmap
 
 
-def test_hud_silent_baseline_matches_static_design(qapp):
-    """At level=0 the dots must match #14's static look (2 px, ~30 % alpha)
-    so the redesign isn't visually regressed."""
+def _slot_height(slot_level: float) -> int:
+    """Mirror the height ramp from RecordingHUD.paintEvent so tests can
+    pin the exact per-slot geometry without inspecting pixels."""
+    return RecordingHUD._BAR_BASELINE_HEIGHT + int(
+        (RecordingHUD._BAR_PEAK_HEIGHT - RecordingHUD._BAR_BASELINE_HEIGHT)
+        * slot_level
+    )
+
+
+def _slot_alpha(slot_level: float) -> int:
+    return RecordingHUD._BAR_BASELINE_ALPHA + int(
+        (RecordingHUD._BAR_PEAK_ALPHA - RecordingHUD._BAR_BASELINE_ALPHA)
+        * slot_level
+    )
+
+
+def test_hud_geometry_constants_match_visual_contract(qapp):
+    """Pin the public visual contract from #31: 5 bars × 2 px wide × 3 px
+    gap, height 2 → 18 px, alpha 127 → 255, pure white."""
+    assert RecordingHUD._BAR_COUNT == 5
+    assert RecordingHUD._BAR_WIDTH == 2
+    assert RecordingHUD._BAR_GAP == 3
+    assert RecordingHUD._BAR_BASELINE_HEIGHT == 2
+    assert RecordingHUD._BAR_PEAK_HEIGHT == 18
+    assert RecordingHUD._BAR_BASELINE_ALPHA == 127
+    assert RecordingHUD._BAR_PEAK_ALPHA == 255
+    assert RecordingHUD._BAR_RGB == (255, 255, 255)
+    # 5 × 2 + 4 × 3 = 22 px footprint.
+    assert RecordingHUD._BAR_CLUSTER_WIDTH == 22
+
+
+def test_hud_silent_baseline_after_buffer_fills(qapp):
+    """level=0.0 sustained for ≥ 5 ticks → every slot reads the silent
+    baseline (2 px tall, alpha 127)."""
     hud = RecordingHUD(level_provider=lambda: 0.0)
-    # Read directly from the geometry constants to pin the contract; the
-    # paintEvent uses these same constants on the level=0 branch.
-    assert hud._DOT_BASELINE_DIAMETER == 2
-    assert hud._DOT_BASELINE_ALPHA == 77
-    # Smoke render — must not crash and must paint a baseline frame.
+    for _ in range(RecordingHUD._BAR_COUNT):
+        hud._tick()
+    assert list(hud._levels) == [0.0] * RecordingHUD._BAR_COUNT
+    for level in hud._levels:
+        assert _slot_height(level) == 2
+        assert _slot_alpha(level) == 127
     hud.show_at_bottom_center()
     _render_to_pixmap(hud)
     hud.hide()
 
 
-def test_hud_peak_level_reaches_peak_geometry(qapp):
-    """At level=1.0 dots are 6 px diameter / fully opaque per the issue."""
+def test_hud_peak_level_after_buffer_fills(qapp):
+    """level=1.0 sustained for ≥ 5 ticks → every slot at peak
+    (18 px tall, alpha 255)."""
     hud = RecordingHUD(level_provider=lambda: 1.0)
-    assert hud._DOT_PEAK_DIAMETER == 6
-    assert hud._DOT_PEAK_ALPHA == 255
+    for _ in range(RecordingHUD._BAR_COUNT):
+        hud._tick()
+    assert list(hud._levels) == [1.0] * RecordingHUD._BAR_COUNT
+    for level in hud._levels:
+        assert _slot_height(level) == 18
+        assert _slot_alpha(level) == 255
     hud.show_at_bottom_center()
     _render_to_pixmap(hud)
     hud.hide()
+
+
+def test_hud_stagger_rightmost_is_newest(qapp):
+    """Feed [0.2, 0.4, 0.6, 0.8, 1.0] over 5 consecutive ticks. The
+    rightmost slot must be the most recent sample (1.0) and the leftmost
+    the oldest still in the buffer (0.2). This is the visible
+    left-to-right travel of voice peaks."""
+    feed = [0.2, 0.4, 0.6, 0.8, 1.0]
+    pointer = {"i": 0}
+
+    def provider() -> float:
+        v = feed[pointer["i"]]
+        pointer["i"] += 1
+        return v
+
+    hud = RecordingHUD(level_provider=provider)
+    for _ in range(len(feed)):
+        hud._tick()
+    slots = list(hud._levels)
+    assert slots == feed  # leftmost = oldest, rightmost = newest
+    assert slots[0] == pytest.approx(0.2)
+    assert slots[-1] == pytest.approx(1.0)
 
 
 def test_hud_intermediate_level_renders_without_crash(qapp):
-    """Mid-range level produces an intermediate radius/alpha; we don't try
+    """Mid-range level produces an intermediate height/alpha; we don't try
     to read pixels here (too brittle across Qt versions) — we just confirm
     the paint path completes for a non-edge level."""
     hud = RecordingHUD(level_provider=lambda: 0.5)
+    for _ in range(RecordingHUD._BAR_COUNT):
+        hud._tick()
     hud.show_at_bottom_center()
     _render_to_pixmap(hud)
     hud.hide()
 
 
-def test_hud_no_level_provider_does_not_crash(qapp):
-    """Defensive: the HUD must render even without a level source — e.g.
-    when constructed in a test or before the recorder is wired up."""
+def test_hud_no_level_provider_stays_at_baseline(qapp):
+    """Defensive: with no provider every tick pushes 0.0, so all bars
+    stay at the silent baseline. Must never crash."""
     hud = RecordingHUD()  # no provider
     assert hud._current_level() == 0.0
+    for _ in range(RecordingHUD._BAR_COUNT):
+        hud._tick()
+    assert list(hud._levels) == [0.0] * RecordingHUD._BAR_COUNT
     hud.show_at_bottom_center()
     _render_to_pixmap(hud)
     hud.hide()
 
 
 def test_hud_level_provider_exception_is_swallowed(qapp):
-    """A broken provider must degrade gracefully to baseline — never crash
-    the HUD repaint."""
+    """A broken provider must degrade gracefully to the silent baseline —
+    every tick pushes 0.0 and the paint path keeps running."""
     def boom() -> float:
         raise RuntimeError("audio thread is dead")
 
     hud = RecordingHUD(level_provider=boom)
     assert hud._current_level() == 0.0  # falls back to baseline
+    for _ in range(RecordingHUD._BAR_COUNT):
+        hud._tick()
+    assert list(hud._levels) == [0.0] * RecordingHUD._BAR_COUNT
     hud.show_at_bottom_center()
     _render_to_pixmap(hud)
+    hud.hide()
+
+
+def test_hud_fresh_construction_renders_at_baseline(qapp):
+    """A freshly-constructed HUD with zero ticks renders all 5 bars at
+    the silent baseline because the deque is pre-populated with zeros."""
+    hud = RecordingHUD(level_provider=lambda: 1.0)
+    # No ticks yet: the buffer must already hold 5 zeros.
+    assert list(hud._levels) == [0.0] * RecordingHUD._BAR_COUNT
+    hud.show_at_bottom_center()
+    _render_to_pixmap(hud)  # must not crash before any sample arrives
     hud.hide()
 
 
@@ -214,6 +292,7 @@ def test_hud_set_level_provider_late_binds(qapp):
 
 
 def test_hud_timer_runs_at_30hz(qapp):
-    """30 Hz polling for smooth volume-reactive animation."""
+    """30 Hz polling for smooth waveform animation — also sets the stagger
+    speed (5 slots × 33 ms ≈ 165 ms per traversal)."""
     hud = RecordingHUD()
     assert hud._timer.interval() == 33
