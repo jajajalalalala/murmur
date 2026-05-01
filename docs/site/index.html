@@ -11,7 +11,9 @@
   <meta property="og:description" content="Free, local-first dictation for macOS. No subscription, no cloud, no telemetry." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://jajajalalalala.github.io/murmur/" />
+  <meta property="og:image" content="https://jajajalalalala.github.io/murmur/icon.png" />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://jajajalalalala.github.io/murmur/icon.png" />
 
   <link rel="icon" type="image/png" href="icon.png" />
   <link rel="stylesheet" href="style.css" />
@@ -33,7 +35,12 @@
       </div>
 
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/jajajalalalala/murmur/releases/latest">
+        <!-- Direct DMG download. ``releases/latest/download/<asset>`` is a
+             GitHub redirect that always points at the matching asset on the
+             newest non-draft Release, so this URL never goes stale on a
+             version bump. The stable ``Murmur.dmg`` filename is produced by
+             the release workflow (see .github/workflows/release.yml). -->
+        <a class="btn btn-primary" href="https://github.com/jajajalalalala/murmur/releases/latest/download/Murmur.dmg">
           Download for Mac
           <span class="btn-sub">macOS 13+ · Apple Silicon &amp; Intel</span>
         </a>
