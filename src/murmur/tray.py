@@ -228,21 +228,28 @@ def run_tray(cfg: config_mod.Config) -> int:
         # doesn't today; cheap insurance).
         apply_theme(app, DARK if cfg.dark_mode else LIGHT)
 
-    # Legacy permission gates (``_ensure_input_monitoring`` +
-    # ``_hint_accessibility_if_denied``). These are skipped when the
-    # user just walked through the onboarding wizard — the wizard
-    # already handled permission grant/skip and saved
-    # ``onboarded=true``. Surfacing a second QMessageBox immediately
-    # after the wizard for the SAME permission was the "shows up
-    # twice" feedback in #20-followup. The legacy gates still fire
-    # on subsequent launches if a returning user revoked permission
-    # in System Settings.
+    # Legacy permission gates removed: ad-hoc-signed builds confuse
+    # macOS's TCC database (each rebuild has a different code-sign
+    # hash, so toggling ``Murmur ON`` in Privacy & Security registers
+    # against build N's identity, then build N+1 reads back as
+    # ``denied``). The gates were firing the same QMessageBox on
+    # every launch even when the user had granted permission moments
+    # earlier — the user's "shows up twice" feedback was actually
+    # "shows up every launch forever".
+    #
+    # New approach: don't gate. ``pynput`` attempts to attach the
+    # global hotkey listener; if Input Monitoring is missing it
+    # silently fails to receive events (logged at debug). The user
+    # notices their hotkey isn't working and grants the permission
+    # in System Settings on their own time. Same for Accessibility:
+    # if it's missing, ``inject.paste_at_cursor`` falls through to
+    # clipboard-only and the tray notification reads "Copied: ..."
+    # instead of pasting — a graceful degradation, not a stuck modal.
+    #
+    # The wizard's permission step is still the right place for
+    # first-run hand-holding, but we don't pile a second gate on
+    # top.
     accessibility_pending = False
-    if not fresh_onboarding:
-        if not _ensure_input_monitoring():
-            return 2
-        if cfg.auto_paste:
-            accessibility_pending = _hint_accessibility_if_denied()
 
     bridge = _StateBridge()
     tray = QSystemTrayIcon()
